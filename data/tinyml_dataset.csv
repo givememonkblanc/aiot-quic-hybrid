@@ -1,0 +1,1 @@
+timestamp_us,packet_type,payload_len,rtt_ms,loss_percent,tx_queue_depth,datagram_budget,stream_window_available,quic_ready,cpu_usage,heap_free,decision_mode,pacing_level

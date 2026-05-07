@@ -1,0 +1,176 @@
+{
+  "telemetry": {
+    "samples": 0,
+    "handshake_time_ms": {
+      "count": 0.0,
+      "avg": 0.0,
+      "p50": 0.0,
+      "p95": 0.0,
+      "p99": 0.0,
+      "max": 0.0
+    },
+    "rtt_ms": {
+      "count": 0.0,
+      "avg": 0.0,
+      "p50": 0.0,
+      "p95": 0.0,
+      "p99": 0.0,
+      "max": 0.0
+    },
+    "heap_free": {
+      "count": 0.0,
+      "avg": 0.0,
+      "p50": 0.0,
+      "p95": 0.0,
+      "p99": 0.0,
+      "max": 0.0
+    },
+    "main_stack_hwm": {
+      "count": 0.0,
+      "avg": 0.0,
+      "p50": 0.0,
+      "p95": 0.0,
+      "p99": 0.0,
+      "max": 0.0
+    },
+    "net_tx_stack_hwm": {
+      "count": 0.0,
+      "avg": 0.0,
+      "p50": 0.0,
+      "p95": 0.0,
+      "p99": 0.0,
+      "max": 0.0
+    },
+    "inference_us": {
+      "count": 0.0,
+      "avg": 0.0,
+      "p50": 0.0,
+      "p95": 0.0,
+      "p99": 0.0,
+      "max": 0.0
+    },
+    "inference_to_enqueue_us": {
+      "count": 0.0,
+      "avg": 0.0,
+      "p50": 0.0,
+      "p95": 0.0,
+      "p99": 0.0,
+      "max": 0.0
+    },
+    "freshness_us": {
+      "count": 0.0,
+      "avg": 0.0,
+      "p50": 0.0,
+      "p95": 0.0,
+      "p99": 0.0,
+      "max": 0.0
+    },
+    "latest_counters": {
+      "tx_queue_depth": "0",
+      "tx_queue_max": "0",
+      "route_queue_full_count": "0",
+      "stream_send_ok": "0",
+      "stream_send_fail": "0",
+      "datagrams_sent": "0",
+      "datagrams_lost": "0"
+    },
+    "plot_data": {
+      "rtt_ms_samples": [],
+      "inference_us_samples": [],
+      "inference_to_enqueue_us_samples": [],
+      "freshness_us_samples": [],
+      "heap_free_samples": []
+    }
+  },
+  "tx": {
+    "samples": 1,
+    "stream": {
+      "count": 0,
+      "qwait_us": {
+        "count": 0.0,
+        "avg": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "send_us": {
+        "count": 0.0,
+        "avg": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "e2e_us": {
+        "count": 0.0,
+        "avg": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "depth": {
+        "count": 0.0,
+        "avg": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "failures": 0,
+      "throughput_bps": 0.0
+    },
+    "datagram": {
+      "count": 1,
+      "qwait_us": {
+        "count": 1.0,
+        "avg": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "send_us": {
+        "count": 1.0,
+        "avg": 56637.0,
+        "p50": 56637.0,
+        "p95": 56637.0,
+        "p99": 56637.0,
+        "max": 56637.0
+      },
+      "e2e_us": {
+        "count": 1.0,
+        "avg": 56637.0,
+        "p50": 56637.0,
+        "p95": 56637.0,
+        "p99": 56637.0,
+        "max": 56637.0
+      },
+      "depth": {
+        "count": 1.0,
+        "avg": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "failures": 0,
+      "throughput_bps": 0.0
+    },
+    "plot_data": {
+      "stream_send_us_samples": [],
+      "datagram_send_us_samples": [
+        56637.0
+      ],
+      "mode_counts": {
+        "stream": 0,
+        "datagram": 1
+      },
+      "mode_throughput_bps": {
+        "stream": 0.0,
+        "datagram": 0.0
+      }
+    }
+  }
+}

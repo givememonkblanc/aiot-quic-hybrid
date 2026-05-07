@@ -1,0 +1,2 @@
+log_time_ms,mode,source,len,qwait_us,send_us,e2e_us,depth,ret
+6395,datagram,mqtt,21,0,56637,56637,0,0

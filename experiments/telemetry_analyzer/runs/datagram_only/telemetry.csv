@@ -1,0 +1,1 @@
+timestamp_us,type,payload_len,rtt_ms,loss_percent,tx_queue_depth,datagram_budget,handshake_time_ms,stream_window_available,quic_ready,cpu_usage,heap_free,heap_caps,main_stack_hwm,net_tx_stack_hwm,tx_queue_max,route_queue_full_count,stream_send_ok,stream_send_fail,datagrams_sent,datagrams_lost,inference_us,inference_to_enqueue_us,decision_mode,pacing_level,ai,backend,det
