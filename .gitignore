@@ -1,0 +1,31 @@
+.cache/
+build/
+**/__pycache__/
+**/.git
+
+# Local logs and captures
+*.log
+esp32_logs.txt
+monitor_capture.log
+*.bin
+
+# ESP-IDF local config backups
+sdkconfig.old
+
+# Runtime experiment artifacts containing local network details
+experiments/runtime_server_files/
+
+# Host receiver runtime artifacts and local keys
+host_receiver/qlog_dir/
+host_receiver/certs/key.pem
+host_receiver/picoquic/CMakeFiles/
+host_receiver/picoquic/CMakeCache.txt
+host_receiver/picoquic/Testing/
+host_receiver/picoquic/cmake_install.cmake
+host_receiver/picoquic/CTestTestfile.cmake
+host_receiver/picoquic/DartConfiguration.tcl
+host_receiver/picoquic/UpgradeLog.htm
+host_receiver/picoquic/valgrind_out.txt
+
+# Generated telemetry analyzer output
+experiments/telemetry_analyzer/output/
