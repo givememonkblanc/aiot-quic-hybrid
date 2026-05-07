@@ -1,0 +1,9 @@
+description: AI inference backend boundary for ESP32-S3 vision experiments.
+dependencies:
+  idf: ">=5.2"
+  esp_jpeg:
+    version: "^1.3.1"
+    public: true
+  espressif/esp-tflite-micro:
+    version: "*"
+    public: false
