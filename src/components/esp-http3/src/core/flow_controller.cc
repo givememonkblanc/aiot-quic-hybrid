@@ -1,0 +1,266 @@
+/**
+ * @file flow_controller.cc
+ * @brief Flow Control Implementation
+ */
+
+#include "core/flow_controller.h"
+#include "quic/quic_frame.h"
+
+#include <algorithm>
+#include "esp_log.h"
+
+#define TAG "FlowController"
+
+namespace esp_http3 {
+
+FlowController::FlowController() {
+    Reset();
+}
+
+void FlowController::Initialize(uint64_t initial_max_data, 
+                                 uint64_t initial_max_stream_data) {
+    initial_max_data_ = initial_max_data;
+    initial_max_stream_data_ = initial_max_stream_data;
+    conn_recv_max_ = initial_max_data;
+    conn_recv_max_sent_ = initial_max_data;
+}
+
+void FlowController::Reset() {
+    conn_send_offset_ = 0;
+    conn_send_max_ = 0;
+    conn_recv_offset_ = 0;
+    conn_recv_consumed_ = 0;
+    conn_recv_max_ = quic::defaults::kInitialMaxData;
+    conn_recv_max_sent_ = quic::defaults::kInitialMaxData;
+    streams_.clear();
+}
+
+//=============================================================================
+// Connection-level
+//=============================================================================
+
+void FlowController::OnMaxDataReceived(uint64_t max_data) {
+    if (max_data > conn_send_max_) {
+        conn_send_max_ = max_data;
+    }
+}
+
+bool FlowController::IsConnectionBlocked() const {
+    return conn_send_offset_ >= conn_send_max_;
+}
+
+uint64_t FlowController::GetConnectionSendWindow() const {
+    return conn_send_max_ > conn_send_offset_ ? 
+           conn_send_max_ - conn_send_offset_ : 0;
+}
+
+void FlowController::OnBytesSent(uint64_t bytes) {
+    conn_send_offset_ += bytes;
+}
+
+void FlowController::OnBytesReceived(uint64_t bytes) {
+    conn_recv_offset_ += bytes;
+}
+
+void FlowController::OnBytesConsumed(uint64_t bytes) {
+    conn_recv_consumed_ += bytes;
+    // Don't let consumed exceed received
+    if (conn_recv_consumed_ > conn_recv_offset_) {
+        conn_recv_consumed_ = conn_recv_offset_;
+    }
+}
+
+bool FlowController::ShouldSendMaxData() const {
+    // Use consumed bytes (not received bytes) for backpressure support
+    // This allows upper layer to control flow by delaying consumption acknowledgment
+    uint64_t consumed = conn_recv_consumed_;
+    uint64_t current_limit = conn_recv_max_sent_;
+    
+    // Calculate remaining window based on consumed bytes
+    if (consumed >= current_limit) {
+        return true;  // Window exhausted, must send immediately
+    }
+    
+    uint64_t remaining = current_limit - consumed;
+    // Send when remaining window is less than half of initial window
+    return remaining < initial_max_data_ * kUpdateThreshold;
+}
+
+bool FlowController::BuildMaxDataFrame(quic::BufferWriter* writer) {
+    // Calculate new limit based on consumed bytes for proper backpressure
+    // New limit = consumed + buffer_size, prevents receiving more than we can handle
+    uint64_t consumed = conn_recv_consumed_;
+    uint64_t current_limit = conn_recv_max_sent_;
+    
+    // New limit is strictly based on consumed bytes + one window size
+    uint64_t new_limit = consumed + initial_max_data_;
+    
+    // Don't send if new limit is not larger than current
+    if (new_limit <= current_limit) {
+        return false;
+    }
+    
+    if (!quic::BuildMaxDataFrame(writer, new_limit)) {
+        return false;
+    }
+    
+    conn_recv_max_ = new_limit;
+    conn_recv_max_sent_ = new_limit;
+    return true;
+}
+
+//=============================================================================
+// Stream-level
+//=============================================================================
+
+void FlowController::CreateStream(uint64_t stream_id, uint64_t initial_max) {
+    if (streams_.find(stream_id) != streams_.end()) {
+        return;  // Already exists
+    }
+    
+    StreamFlowState state;
+    state.send_max = initial_max;
+    state.recv_max = initial_max_stream_data_;
+    state.recv_max_sent = initial_max_stream_data_;
+    streams_[stream_id] = state;
+}
+
+void FlowController::OnMaxStreamDataReceived(uint64_t stream_id, uint64_t max_data) {
+    auto it = streams_.find(stream_id);
+    if (it == streams_.end()) {
+        CreateStream(stream_id, max_data);
+        return;
+    }
+    
+    if (max_data > it->second.send_max) {
+        it->second.send_max = max_data;
+    }
+}
+
+bool FlowController::IsStreamBlocked(uint64_t stream_id) const {
+    auto it = streams_.find(stream_id);
+    if (it == streams_.end()) {
+        return true;
+    }
+    return it->second.IsSendBlocked();
+}
+
+uint64_t FlowController::GetStreamSendWindow(uint64_t stream_id) const {
+    auto it = streams_.find(stream_id);
+    if (it == streams_.end()) {
+        return 0;
+    }
+    return it->second.SendWindow();
+}
+
+void FlowController::OnStreamBytesSent(uint64_t stream_id, uint64_t bytes) {
+    auto it = streams_.find(stream_id);
+    if (it != streams_.end()) {
+        it->second.send_offset += bytes;
+    }
+    OnBytesSent(bytes);
+}
+
+void FlowController::OnStreamBytesReceived(uint64_t stream_id, uint64_t offset, uint64_t len) {
+    auto it = streams_.find(stream_id);
+    if (it == streams_.end()) {
+        // Create stream state if it doesn't exist (e.g., server-initiated streams)
+        CreateStream(stream_id, 0);
+        it = streams_.find(stream_id);
+    }
+    if (it != streams_.end()) {
+        // Calculate the end offset of this data
+        uint64_t end_offset = offset + len;
+        
+        // Only count bytes beyond what we've already accounted for
+        // This correctly handles out-of-order and duplicate/retransmitted data
+        if (end_offset > it->second.recv_offset) {
+            uint64_t new_bytes = end_offset - it->second.recv_offset;
+            it->second.recv_offset = end_offset;  // Update to highest offset
+            OnBytesReceived(new_bytes);  // Only count truly new bytes
+        }
+        // else: duplicate/overlap data, don't count toward flow control
+    }
+}
+
+void FlowController::OnStreamBytesConsumed(uint64_t stream_id, uint64_t bytes) {
+    auto it = streams_.find(stream_id);
+    if (it != streams_.end()) {
+        it->second.recv_consumed += bytes;
+        // Don't let consumed exceed received
+        if (it->second.recv_consumed > it->second.recv_offset) {
+            it->second.recv_consumed = it->second.recv_offset;
+        }
+        // Also update connection-level consumed count
+        OnBytesConsumed(bytes);
+    }
+}
+
+bool FlowController::ShouldSendMaxStreamData(uint64_t stream_id) const {
+    auto it = streams_.find(stream_id);
+    if (it == streams_.end()) {
+        return false;
+    }
+    
+    // Use consumed bytes (not received bytes) for backpressure support
+    // This allows upper layer to control flow by delaying consumption acknowledgment
+    uint64_t consumed = it->second.recv_consumed;
+    uint64_t current_limit = it->second.recv_max_sent;
+    
+    // Calculate remaining window based on consumed bytes
+    if (consumed >= current_limit) {
+        return true;  // Window exhausted, must send immediately
+    }
+    
+    uint64_t remaining = current_limit - consumed;
+    // Send when remaining window is less than half of initial window
+    return remaining < initial_max_stream_data_ * kUpdateThreshold;
+}
+
+bool FlowController::BuildMaxStreamDataFrame(quic::BufferWriter* writer, 
+                                              uint64_t stream_id) {
+    auto it = streams_.find(stream_id);
+    if (it == streams_.end()) {
+        return false;
+    }
+    
+    // Calculate new limit based on consumed bytes for proper backpressure
+    // New limit = consumed + buffer_size, so server can only send what we can buffer
+    // This prevents buffer overflow when there's unconsumed data in the buffer
+    uint64_t consumed = it->second.recv_consumed;
+    uint64_t current_limit = it->second.recv_max_sent;
+    
+    // New limit is strictly based on consumed bytes + one buffer size
+    // This ensures: (new_limit - recv_offset) + (recv_offset - consumed) <= buffer_size
+    uint64_t new_limit = consumed + initial_max_stream_data_;
+    
+    // Don't send if new limit is not larger than current
+    if (new_limit <= current_limit) {
+        return false;
+    }
+    
+    if (!quic::BuildMaxStreamDataFrame(writer, stream_id, new_limit)) {
+        return false;
+    }
+    
+    it->second.recv_max = new_limit;
+    it->second.recv_max_sent = new_limit;
+    return true;
+}
+
+StreamFlowState* FlowController::GetStreamState(uint64_t stream_id) {
+    auto it = streams_.find(stream_id);
+    return it != streams_.end() ? &it->second : nullptr;
+}
+
+const StreamFlowState* FlowController::GetStreamState(uint64_t stream_id) const {
+    auto it = streams_.find(stream_id);
+    return it != streams_.end() ? &it->second : nullptr;
+}
+
+void FlowController::RemoveStream(uint64_t stream_id) {
+    streams_.erase(stream_id);
+}
+
+} // namespace esp_http3
+
