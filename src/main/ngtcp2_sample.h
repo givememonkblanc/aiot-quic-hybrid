@@ -25,5 +25,10 @@ void quic_client_cleanup(void);
 // Thread-safe QUIC operations
 int quic_client_write_safe(const uint8_t *data, size_t datalen);
 int quic_client_read_safe(uint8_t *buffer, size_t buffer_size, size_t *bytes_read);
+int quic_client_write_datagram_safe(const uint8_t *data, size_t datalen, uint64_t dgram_id);
+uint32_t quic_client_get_handshake_time_ms(void);
+void quic_client_get_datagram_stats(uint32_t *acked, uint32_t *lost);
+
+void quic_client_get_metrics(uint32_t *rtt_ms, uint32_t *cwnd, uint32_t *bytes_in_flight);
 
 #endif

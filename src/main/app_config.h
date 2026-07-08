@@ -48,6 +48,23 @@
 
 #define APP_MAX_PAYLOAD_SIZE 1024
 
+/*
+ * Delivery timeout per deadline_class (MOQT delivery-timeout analog).
+ * A queued unreliable message older than its class timeout is dropped
+ * instead of transmitted. 0 = no expiry.
+ */
+#ifndef APP_DEADLINE_CLASS0_MS
+#define APP_DEADLINE_CLASS0_MS 0
+#endif
+
+#ifndef APP_DEADLINE_CLASS1_MS
+#define APP_DEADLINE_CLASS1_MS 500
+#endif
+
+#ifndef APP_DEADLINE_IMAGE_MS
+#define APP_DEADLINE_IMAGE_MS 200
+#endif
+
 #ifndef APP_NET_TX_STACK_SAMPLE_INTERVAL
 #define APP_NET_TX_STACK_SAMPLE_INTERVAL 10
 #endif

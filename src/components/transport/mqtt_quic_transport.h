@@ -6,6 +6,8 @@
 #include "freertos/queue.h"
 #include "esp_timer.h"
 
+#include "../common/include/aiot_object.h"
+
 /**
  * @brief Delivery mode for hybrid QUIC transport (Stream vs Datagram).
  */
@@ -22,7 +24,10 @@ typedef struct {
     uint8_t *payload;
     size_t payload_len;
     uint32_t topic_id;
-    TickType_t timeout_ticks;
+    uint8_t track_id;
+    uint8_t priority;
+    uint32_t object_seq;
+    int64_t deadline_us;      // absolute expiry (esp_timer domain), 0 = no expiry
     int64_t enqueue_ts_us;
     int64_t dequeue_ts_us;
     int64_t send_start_ts_us;
@@ -71,6 +76,9 @@ typedef struct NetworkContext
     uint32_t stream_send_fail;
     uint32_t datagram_send_ok;
     uint32_t datagram_send_fail;
+    uint32_t datagram_expired;
+    uint32_t datagram_evicted;
+    uint32_t object_seq_next[4];   // per-track object sequence (index = track_id)
     uint32_t main_stack_hwm;
     uint32_t net_tx_stack_hwm;
 } NetworkContext_t;
@@ -91,7 +99,9 @@ int mqtt_quic_transport_send_hybrid(NetworkContext_t *ctx,
                                     delivery_mode_t mode,
                                     const uint8_t *payload,
                                     size_t payload_len,
-                                    TickType_t timeout_ticks);
+                                    uint8_t track_id,
+                                    uint8_t priority,
+                                    uint32_t deadline_ms);
 
 // TransportInterface declaration
 extern TransportInterface_t xTransportInterface;

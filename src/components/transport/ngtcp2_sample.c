@@ -81,6 +81,11 @@ static int64_t g_quic_handshake_start_us;
 static int64_t g_quic_handshake_done_us;
 static uint32_t g_quic_handshake_time_ms;
 
+// Real datagram delivery accounting fed by ngtcp2 ACK processing
+// (distinct from send-attempt failures counted in the transport layer).
+static volatile uint32_t g_dgram_acked;
+static volatile uint32_t g_dgram_lost;
+
 // Global configuration for dynamic hostname/port
 static quic_client_config_t g_config = {
     .hostname = REMOTE_HOST,
@@ -359,6 +364,26 @@ static int extend_max_local_streams_bidi(ngtcp2_conn *conn,
   return 0;
 }
 
+static int ack_datagram_cb(ngtcp2_conn *conn, uint64_t dgram_id,
+                           void *user_data) {
+  (void)conn;
+  (void)user_data;
+  g_dgram_acked++;
+  ESP_LOGD(TAG, "[DGRAM_ACK] seq=%llu acked=%lu",
+           (unsigned long long)dgram_id, (unsigned long)g_dgram_acked);
+  return 0;
+}
+
+static int lost_datagram_cb(ngtcp2_conn *conn, uint64_t dgram_id,
+                            void *user_data) {
+  (void)conn;
+  (void)user_data;
+  g_dgram_lost++;
+  ESP_LOGW(TAG, "[DGRAM_LOST] seq=%llu lost=%lu",
+           (unsigned long long)dgram_id, (unsigned long)g_dgram_lost);
+  return 0;
+}
+
 static void log_printf(void *user_data, const char *fmt, ...) {
   va_list ap;
   (void)user_data;
@@ -405,6 +430,8 @@ static int client_quic_init(struct client *c,
     .delete_crypto_cipher_ctx = delete_crypto_cipher_ctx_wdt_cb,
     .get_path_challenge_data = ngtcp2_crypto_get_path_challenge_data_cb,
     .version_negotiation = ngtcp2_crypto_version_negotiation_cb,
+    .ack_datagram = ack_datagram_cb,
+    .lost_datagram = lost_datagram_cb,
   };
   ngtcp2_cid dcid, scid;
   ngtcp2_settings settings;
@@ -1021,6 +1048,8 @@ int quic_client_init_with_config(const quic_client_config_t *config) {
     g_quic_handshake_start_us = esp_timer_get_time();
     g_quic_handshake_done_us = 0;
     g_quic_handshake_time_ms = 0;
+    g_dgram_acked = 0;
+    g_dgram_lost = 0;
     
     if (config) {
         g_config.hostname = config->hostname;
@@ -1171,6 +1200,15 @@ uint32_t quic_client_get_handshake_time_ms(void) {
     return g_quic_handshake_time_ms;
 }
 
+void quic_client_get_datagram_stats(uint32_t *acked, uint32_t *lost) {
+    if (acked) {
+        *acked = g_dgram_acked;
+    }
+    if (lost) {
+        *lost = g_dgram_lost;
+    }
+}
+
 int quic_client_local_stream_avail(void) {
     if (g_client.conn == NULL) {
         return 0;
@@ -1284,7 +1322,8 @@ int quic_client_read_safe(uint8_t *buffer, size_t buffer_size, size_t *bytes_rea
     return result;
 }
 
-int quic_client_write_datagram_safe(const uint8_t *data, size_t datalen) {
+int quic_client_write_datagram_safe(const uint8_t *data, size_t datalen,
+                                    uint64_t dgram_id) {
     if (quic_mutex == NULL) {
         ESP_LOGE(TAG, "QUIC mutex not initialized");
         return -1;
@@ -1326,7 +1365,6 @@ int quic_client_write_datagram_safe(const uint8_t *data, size_t datalen) {
     ngtcp2_pkt_info pi;
     ngtcp2_path_storage_zero(&ps);
     int accepted = 0;
-    uint64_t dgram_id = (uint64_t)esp_timer_get_time();
     ngtcp2_tstamp ts = timestamp();
     ngtcp2_ssize nwrite = ngtcp2_conn_write_datagram(
         conn, &ps.path, &pi, dest, dest_len,

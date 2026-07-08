@@ -24,6 +24,7 @@ typedef struct {
     uint8_t pacing_level;
     uint8_t retransmit_allowed;
     uint8_t drop_allowed;
+    uint16_t delivery_timeout_ms;  // MOQT delivery-timeout analog; 0 = no expiry
 } schedule_decision_t;
 
 typedef struct {
@@ -32,6 +33,8 @@ typedef struct {
     uint8_t image_stream_id;
     uint16_t image_datagram_budget;
     uint16_t control_period_ms;
+    uint16_t telemetry_deadline_ms;  // datagram expiry for telemetry/AI results
+    uint16_t image_deadline_ms;      // datagram expiry for image payloads
     qads_policy_mode_t policy_mode;
 } dl_qads_config_t;
 
@@ -40,4 +43,5 @@ typedef struct {
 } dl_qads_t;
 
 void dl_qads_init(dl_qads_t *scheduler, const dl_qads_config_t *config);
-schedule_decision_t dl_qads_decide(const dl_qads_t *scheduler, const data_packet_t *packet, const net_metrics_t *metrics);
+schedule_decision_t dl_qads_decide(const dl_qads_t *scheduler, const data_packet_t *packet,
+                                   const net_metrics_t *metrics, uint64_t now_us);

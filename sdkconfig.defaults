@@ -32,3 +32,7 @@ CONFIG_QUIC_CC_ALGO_CUBIC=y
 # CONFIG_QUIC_CC_ALGO_BBR=y
 # Uncomment below to use RENO (Classic baseline for comparison)
 # CONFIG_QUIC_CC_ALGO_RENO=y
+
+# CPU run-time stats for resource-conservation measurements
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y

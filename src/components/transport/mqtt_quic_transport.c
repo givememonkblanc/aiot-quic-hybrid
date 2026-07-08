@@ -13,7 +13,10 @@ TransportInterface_t xTransportInterface = {0};
 // Forward declarations for ngtcp2 client functions
 extern struct client g_client;
 extern int quic_client_write_safe(const uint8_t *data, size_t datalen);
-extern int quic_client_write_datagram_safe(const uint8_t *data, size_t datalen);
+extern int quic_client_write_datagram_safe(const uint8_t *data, size_t datalen, uint64_t dgram_id);
+
+// Fits within max_datagram_frame_size (1200) minus QUIC datagram frame overhead.
+#define AIOT_DATAGRAM_MAX_TOTAL 1180U
 extern int quic_client_read_safe(uint8_t *buffer, size_t buffer_size, size_t *bytes_read);
 extern bool quic_client_is_connected(void);
 
@@ -34,11 +37,29 @@ static void network_tx_task(void *arg) {
         if (xQueueReceive(ctx->route_queue, &msg, portMAX_DELAY) == pdTRUE) {
             msg.dequeue_ts_us = esp_timer_get_time();
             msg.send_start_ts_us = msg.dequeue_ts_us;
+
+            // MOQT delivery-timeout analog: an unreliable object whose deadline
+            // passed while queued is stale by definition - shed it here.
+            if (msg.mode == DELIVERY_UNRELIABLE &&
+                msg.deadline_us != 0 &&
+                msg.dequeue_ts_us > msg.deadline_us) {
+                ctx->datagram_expired++;
+                ESP_LOGW("QUIC_TX", "[EXPIRED] track=%u seq=%lu age_us=%lld deadline_us=%lld depth=%lu",
+                         (unsigned)msg.track_id,
+                         (unsigned long)msg.object_seq,
+                         (long long)(msg.dequeue_ts_us - msg.enqueue_ts_us),
+                         (long long)(msg.deadline_us - msg.enqueue_ts_us),
+                         (unsigned long)msg.queue_depth_at_enqueue);
+                free(msg.payload);
+                continue;
+            }
+
             int ret = -1;
             if (msg.mode == DELIVERY_RELIABLE) {
                 ret = quic_client_write_safe(msg.payload, msg.payload_len);
             } else if (msg.mode == DELIVERY_UNRELIABLE) {
-                ret = quic_client_write_datagram_safe(msg.payload, msg.payload_len);
+                ret = quic_client_write_datagram_safe(msg.payload, msg.payload_len,
+                                                      (uint64_t)msg.object_seq);
             } else {
                 ESP_LOGW(TAG, "Unknown delivery mode: %d", msg.mode);
             }
@@ -90,11 +111,11 @@ static void network_tx_task(void *arg) {
                 }
             }
 
-            ESP_LOGI(TAG, "[DATAGRAM_LIFECYCLE] Pre-free check: payload=%p, len=%zu", msg.payload, msg.payload_len);
+            ESP_LOGD(TAG, "[DATAGRAM_LIFECYCLE] Pre-free check: payload=%p, len=%zu", msg.payload, msg.payload_len);
             if (msg.payload != NULL) {
                 free(msg.payload);
             }
-            ESP_LOGI(TAG, "[DATAGRAM_LIFECYCLE] Post-free check: payload freed successfully");
+            ESP_LOGD(TAG, "[DATAGRAM_LIFECYCLE] Post-free check: payload freed successfully");
 
             tx_loop++;
             if ((tx_loop % APP_NET_TX_STACK_SAMPLE_INTERVAL) == 0U) {
@@ -127,6 +148,9 @@ BaseType_t mqtt_quic_transport_init(NetworkContext_t *pNetworkContext,
     pNetworkContext->stream_send_fail = 0;
     pNetworkContext->datagram_send_ok = 0;
     pNetworkContext->datagram_send_fail = 0;
+    pNetworkContext->datagram_expired = 0;
+    pNetworkContext->datagram_evicted = 0;
+    memset(pNetworkContext->object_seq_next, 0, sizeof(pNetworkContext->object_seq_next));
     pNetworkContext->main_stack_hwm = 0;
     pNetworkContext->net_tx_stack_hwm = 0;
     pNetworkContext->route_queue = xQueueCreate(10, sizeof(iot_route_msg_t));
@@ -147,25 +171,80 @@ BaseType_t mqtt_quic_transport_init(NetworkContext_t *pNetworkContext,
     return pdPASS;
 }
 
+// When the route queue is full, prefer shedding the oldest queued unreliable
+// object over rejecting the new one (freshness-first head drop). Reliable
+// entries are never evicted.
+static bool route_queue_evict_stale_head(NetworkContext_t *ctx)
+{
+    iot_route_msg_t head;
+
+    if (xQueuePeek(ctx->route_queue, &head, 0) != pdTRUE ||
+        head.mode != DELIVERY_UNRELIABLE) {
+        return false;
+    }
+    if (xQueueReceive(ctx->route_queue, &head, 0) != pdTRUE) {
+        return false;
+    }
+    if (head.mode != DELIVERY_UNRELIABLE) {
+        // Raced with the TX task; put the reliable message back (queue was
+        // just drained, so this cannot fail).
+        xQueueSend(ctx->route_queue, &head, 0);
+        return false;
+    }
+
+    ctx->datagram_evicted++;
+    ESP_LOGW("QUIC_TX", "[EVICTED] track=%u seq=%lu age_us=%lld",
+             (unsigned)head.track_id,
+             (unsigned long)head.object_seq,
+             (long long)(esp_timer_get_time() - head.enqueue_ts_us));
+    free(head.payload);
+    return true;
+}
+
 int mqtt_quic_transport_send_hybrid(NetworkContext_t *ctx,
                                      delivery_mode_t mode,
                                      const uint8_t *payload,
                                      size_t payload_len,
-                                     TickType_t timeout_ticks)
+                                     uint8_t track_id,
+                                     uint8_t priority,
+                                     uint32_t deadline_ms)
 {
     if (ctx == NULL || ctx->route_queue == NULL || payload == NULL || payload_len == 0) {
         return -1;
     }
 
-    size_t safe_len = payload_len + 16;
+    size_t header_len = (mode == DELIVERY_UNRELIABLE) ? AIOT_OBJECT_HEADER_SIZE : 0;
+    if (mode == DELIVERY_UNRELIABLE &&
+        header_len + payload_len > AIOT_DATAGRAM_MAX_TOTAL) {
+        ESP_LOGW(TAG, "Datagram payload too large: %zu + %zu > %u",
+                 header_len, payload_len, AIOT_DATAGRAM_MAX_TOTAL);
+        return -1;
+    }
+
+    size_t safe_len = header_len + payload_len + 16;
     uint8_t *heap_payload = malloc(safe_len);
     if (heap_payload == NULL) {
         ESP_LOGW(TAG, "Failed to allocate %zu bytes for queue", safe_len);
         return -1;
     }
     memset(heap_payload, 0, safe_len);
-    memcpy(heap_payload, payload, payload_len);
-    ESP_LOGI(TAG, "[DATAGRAM_LIFECYCLE] Producer malloc: payload=%p, len=%zu (safe_len=%zu)", heap_payload, payload_len, safe_len);
+    memcpy(heap_payload + header_len, payload, payload_len);
+
+    int64_t now_us = esp_timer_get_time();
+    uint8_t track_index = (uint8_t)(track_id < 4U ? track_id : 0U);
+    uint32_t object_seq = ctx->object_seq_next[track_index]++;
+
+    if (mode == DELIVERY_UNRELIABLE) {
+        aiot_object_header_t *hdr = (aiot_object_header_t *)heap_payload;
+        hdr->magic_ver = AIOT_OBJECT_MAGIC_VER;
+        hdr->track_id = track_id;
+        hdr->priority = priority;
+        hdr->flags = (deadline_ms != 0U) ? AIOT_OBJ_FLAG_EXPIRY_DROP_ALLOWED : 0U;
+        hdr->object_seq = object_seq;
+        hdr->gen_ts_ms = (uint32_t)(now_us / 1000);
+    }
+    ESP_LOGD(TAG, "[DATAGRAM_LIFECYCLE] Producer malloc: payload=%p, len=%zu (safe_len=%zu)",
+             heap_payload, header_len + payload_len, safe_len);
 
     uint32_t depth = (uint32_t)uxQueueMessagesWaiting(ctx->route_queue);
     if (depth > ctx->route_queue_max_depth) {
@@ -175,14 +254,22 @@ int mqtt_quic_transport_send_hybrid(NetworkContext_t *ctx,
     iot_route_msg_t msg = {
         .mode = mode,
         .payload = heap_payload,
-        .payload_len = payload_len,
-        .timeout_ticks = timeout_ticks,
-        .enqueue_ts_us = esp_timer_get_time(),
+        .payload_len = header_len + payload_len,
+        .track_id = track_id,
+        .priority = priority,
+        .object_seq = object_seq,
+        .deadline_us = (deadline_ms != 0U) ? now_us + (int64_t)deadline_ms * 1000 : 0,
+        .enqueue_ts_us = now_us,
         .queue_depth_at_enqueue = depth,
         .send_result = -999,
     };
 
-    if (xQueueSend(ctx->route_queue, &msg, timeout_ticks) != pdPASS) {
+    if (xQueueSend(ctx->route_queue, &msg, 0) != pdPASS) {
+        if (route_queue_evict_stale_head(ctx)) {
+            if (xQueueSend(ctx->route_queue, &msg, 0) == pdPASS) {
+                return (int)payload_len;
+            }
+        }
         ctx->route_queue_full_count++;
         if (mode == DELIVERY_UNRELIABLE) {
             ctx->datagram_send_fail++;
@@ -313,29 +400,20 @@ static int send_complete_mqtt_packet(NetworkContext_t *context) {
     // Add a small delay before sending to ensure QUIC is ready
     vTaskDelay(pdMS_TO_TICKS(10));
 
+    // MQTT control packets (CONNECT/SUBSCRIBE/...) always use a QUIC stream,
+    // regardless of APP_TRANSPORT_MODE: session establishment over datagrams
+    // is not deliverable (unacknowledged CONNECT never yields a CONNACK).
+    // DATAGRAM_ONLY applies to the data plane only.
     int64_t send_start_ts_us = esp_timer_get_time();
-#if APP_TRANSPORT_MODE == APP_TRANSPORT_MODE_DATAGRAM_ONLY
-    int result = quic_client_write_datagram_safe(context->send_buffer,
-                                                 context->send_buffer_len);
-#else
     int result = quic_client_write_safe(context->send_buffer,
                                         context->send_buffer_len);
-#endif
     int64_t send_done_ts_us = esp_timer_get_time();
     uint64_t send_latency_us = (uint64_t)(send_done_ts_us - send_start_ts_us);
-    
+
     if (result != 0) {
-#if APP_TRANSPORT_MODE == APP_TRANSPORT_MODE_DATAGRAM_ONLY
-        context->datagram_send_fail++;
-#else
         context->stream_send_fail++;
-#endif
         ESP_LOGE(TAG, "Failed to send complete MQTT packet over QUIC, error %d", result);
-#if APP_TRANSPORT_MODE == APP_TRANSPORT_MODE_DATAGRAM_ONLY
-        ESP_LOGE(TAG, "Datagram send failed (%d) len=%zu send_us=%llu depth=%u",
-#else
         ESP_LOGE(TAG, "Stream send failed (%d) len=%zu send_us=%llu depth=%u",
-#endif
                  result,
                  context->send_buffer_len,
                  (unsigned long long)send_latency_us,
@@ -343,16 +421,6 @@ static int send_complete_mqtt_packet(NetworkContext_t *context) {
         return -1;
     }
 
-#if APP_TRANSPORT_MODE == APP_TRANSPORT_MODE_DATAGRAM_ONLY
-    context->datagram_send_ok++;
-    ESP_LOGI("QUIC_TX", "⚡ [DATAGRAM] src=mqtt len=%zu qwait_us=%u send_us=%llu e2e_us=%llu depth=%u ret=%d",
-             context->send_buffer_len,
-             0U,
-             (unsigned long long)send_latency_us,
-             (unsigned long long)send_latency_us,
-             0U,
-             result);
-#else
     context->stream_send_ok++;
     ESP_LOGI("QUIC_TX", "🚀 [STREAM] src=mqtt len=%zu qwait_us=%u send_us=%llu e2e_us=%llu depth=%u ret=%d",
              context->send_buffer_len,
@@ -361,7 +429,6 @@ static int send_complete_mqtt_packet(NetworkContext_t *context) {
              (unsigned long long)send_latency_us,
              0U,
              result);
-#endif
     
     ESP_LOGI(TAG, "Successfully sent complete MQTT packet (%zu bytes) over QUIC", context->send_buffer_len);
     return 0;

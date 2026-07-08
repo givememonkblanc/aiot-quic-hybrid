@@ -40,6 +40,8 @@ typedef struct {
     uint32_t stream_send_fail;
     uint32_t datagrams_sent;
     uint32_t datagrams_lost;
+    uint32_t datagram_expired;
+    uint32_t datagram_evicted;
     uint32_t packets_reordered;
     uint32_t inference_us;
     uint32_t inference_to_enqueue_us;

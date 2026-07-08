@@ -44,7 +44,8 @@ static schedule_decision_t make_drop_decision(uint8_t pacing_level)
     return decision;
 }
 
-static schedule_decision_t make_datagram_decision(uint8_t pacing_level)
+static schedule_decision_t make_datagram_decision(uint8_t pacing_level,
+                                                  uint16_t delivery_timeout_ms)
 {
     schedule_decision_t decision = {
         .mode = TX_MODE_DATAGRAM,
@@ -52,9 +53,46 @@ static schedule_decision_t make_datagram_decision(uint8_t pacing_level)
         .pacing_level = pacing_level,
         .retransmit_allowed = 0,
         .drop_allowed = 1,
+        .delivery_timeout_ms = delivery_timeout_ms,
     };
 
     return decision;
+}
+
+static uint16_t packet_deadline_ms(const dl_qads_t *scheduler, const data_packet_t *packet)
+{
+    return (packet->type == DATA_TYPE_IMAGE) ? scheduler->config.image_deadline_ms
+                                             : scheduler->config.telemetry_deadline_ms;
+}
+
+static bool network_congested(const net_metrics_t *metrics)
+{
+    return !metrics->stream_window_available ||
+           metrics->tx_queue_depth > 3U ||
+           metrics->rtt_ms > 80U ||
+           metrics->loss_percent > 5U;
+}
+
+/*
+ * AoI-aware shedding: a loss-tolerant packet whose remaining lifetime is
+ * shorter than the current RTT cannot arrive fresh under congestion, so
+ * spending link budget on it only delays newer objects.
+ */
+static bool packet_past_useful_life(const dl_qads_t *scheduler,
+                                    const data_packet_t *packet,
+                                    const net_metrics_t *metrics,
+                                    uint64_t now_us)
+{
+    uint16_t deadline_ms = packet_deadline_ms(scheduler, packet);
+
+    if (!packet->loss_tolerant || deadline_ms == 0U || now_us <= packet->timestamp_us) {
+        return false;
+    }
+
+    uint32_t age_ms = (uint32_t)((now_us - packet->timestamp_us) / 1000ULL);
+    uint32_t remaining_ms = (age_ms < deadline_ms) ? (deadline_ms - age_ms) : 0U;
+
+    return remaining_ms <= metrics->rtt_ms && network_congested(metrics);
 }
 
 void dl_qads_init(dl_qads_t *scheduler, const dl_qads_config_t *config)
@@ -63,11 +101,24 @@ void dl_qads_init(dl_qads_t *scheduler, const dl_qads_config_t *config)
     scheduler->config = *config;
 }
 
-schedule_decision_t dl_qads_decide(const dl_qads_t *scheduler, const data_packet_t *packet, const net_metrics_t *metrics)
+schedule_decision_t dl_qads_decide(const dl_qads_t *scheduler, const data_packet_t *packet,
+                                   const net_metrics_t *metrics, uint64_t now_us)
 {
     uint32_t datagram_budget = metrics->datagram_budget;
 
+    if (packet_past_useful_life(scheduler, packet, metrics, now_us)) {
+        return make_drop_decision(3);
+    }
+
     if (packet->type == DATA_TYPE_AI_RESULT) {
+        // Adaptive forwarding preference: telemetry rides the reliable stream
+        // while the network is healthy, but degrades to datagrams under
+        // congestion so it never queues behind retransmissions.
+        if (scheduler->config.policy_mode != QADS_POLICY_RELIABILITY_BIASED &&
+            metrics->quic_ready &&
+            network_congested(metrics)) {
+            return make_datagram_decision(2, scheduler->config.telemetry_deadline_ms);
+        }
         return make_stream_decision(scheduler->config.ai_stream_id, 0);
     }
 
@@ -116,7 +167,8 @@ schedule_decision_t dl_qads_decide(const dl_qads_t *scheduler, const data_packet
             }
 
             if (datagram_available) {
-                return make_datagram_decision(severe_congestion ? 3U : 2U);
+                return make_datagram_decision(severe_congestion ? 3U : 2U,
+                                              scheduler->config.image_deadline_ms);
             }
 
             if (metrics->stream_window_available) {
@@ -141,5 +193,6 @@ schedule_decision_t dl_qads_decide(const dl_qads_t *scheduler, const data_packet
         return make_drop_decision(3);
     }
 
-    return make_datagram_decision((metrics->rtt_ms > 80U) ? 3U : 2U);
+    return make_datagram_decision((metrics->rtt_ms > 80U) ? 3U : 2U,
+                                  packet_deadline_ms(scheduler, packet));
 }

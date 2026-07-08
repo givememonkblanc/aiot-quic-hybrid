@@ -36,7 +36,10 @@ static void wifi_link_event_handler(void *arg, esp_event_base_t event_base, int3
     }
 
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        printf("[wifi_evt] WIFI_EVENT_STA_DISCONNECTED\n");
+        wifi_event_sta_disconnected_t *disc = (wifi_event_sta_disconnected_t *)event_data;
+        printf("[wifi_evt] WIFI_EVENT_STA_DISCONNECTED reason=%d rssi=%d\n",
+               disc != NULL ? (int)disc->reason : -1,
+               disc != NULL ? (int)disc->rssi : 0);
         if (s_retry_count < WIFI_LINK_MAX_RETRIES) {
             s_retry_count++;
             esp_wifi_connect();
@@ -98,6 +101,9 @@ bool wifi_link_connect(const char *ssid, const char *password, unsigned int time
     esp_wifi_set_mode(WIFI_MODE_STA);
     esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     esp_wifi_start();
+    // Cap TX power to 10dBm: full-power TX bursts brown out the board on
+    // current-limited USB ports (repeated POWERON resets during connect).
+    esp_wifi_set_max_tx_power(40);
     printf("[wifi_link] Wi-Fi start, waiting for connection...\n");
 
     EventBits_t bits = xEventGroupWaitBits(

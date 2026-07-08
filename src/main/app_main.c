@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if __has_include("freertos/FreeRTOS.h")
@@ -29,6 +30,7 @@ static inline void vTaskDelay(uint32_t ticks)
 #include "ngtcp2_sample.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_system.h"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
 
@@ -93,6 +95,9 @@ static void app_log_decision(const data_packet_t *packet, const net_metrics_t *m
         (unsigned long)metrics->inference_to_enqueue_us,
         (unsigned long)decision->mode,
         (unsigned long)decision->pacing_level);
+    printf(",%lu,%lu",
+        (unsigned long)metrics->datagram_expired,
+        (unsigned long)metrics->datagram_evicted);
     
     if (ai_result != NULL && ai_result->detection_count > 0) {
         printf(",ai=%u,backend=%u,det=%u", 
@@ -130,6 +135,69 @@ static void app_log_periodic_summary(uint32_t loop_count, const net_metrics_t *m
 static uint32_t app_get_time_ms(void) {
     return (uint32_t)(esp_timer_get_time() / 1000ULL);
 }
+
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+/*
+ * System-wide CPU busy percentage since the previous call, derived from the
+ * idle tasks' share of the run-time counters (core-count agnostic).
+ * When log_tasks is set, also emits a [CPU-STATS] line with each task's
+ * cumulative share for per-task resource accounting.
+ */
+static uint32_t app_cpu_busy_percent(bool log_tasks)
+{
+    static uint64_t prev_task_total;
+    static uint64_t prev_idle_total;
+
+    UBaseType_t task_count = uxTaskGetNumberOfTasks();
+    TaskStatus_t *status = malloc((size_t)task_count * sizeof(TaskStatus_t));
+    if (status == NULL) {
+        return 0;
+    }
+
+    configRUN_TIME_COUNTER_TYPE total_runtime = 0;
+    task_count = uxTaskGetSystemState(status, task_count, &total_runtime);
+
+    uint64_t task_total = 0;
+    uint64_t idle_total = 0;
+    for (UBaseType_t i = 0; i < task_count; ++i) {
+        task_total += status[i].ulRunTimeCounter;
+        if (strncmp(status[i].pcTaskName, "IDLE", 4) == 0) {
+            idle_total += status[i].ulRunTimeCounter;
+        }
+    }
+
+    uint32_t busy_percent = 0;
+    uint64_t delta_total = task_total - prev_task_total;
+    uint64_t delta_idle = idle_total - prev_idle_total;
+    if (prev_task_total != 0 && delta_total > 0 && delta_idle <= delta_total) {
+        busy_percent = (uint32_t)(100ULL - (delta_idle * 100ULL) / delta_total);
+    }
+    prev_task_total = task_total;
+    prev_idle_total = idle_total;
+
+    if (log_tasks && task_total > 0) {
+        printf("[CPU-STATS] busy_pct=%lu", (unsigned long)busy_percent);
+        for (UBaseType_t i = 0; i < task_count; ++i) {
+            uint64_t share = ((uint64_t)status[i].ulRunTimeCounter * 1000ULL) / task_total;
+            if (share >= 5ULL) {  // skip tasks below 0.5% to keep the line short
+                printf(" %s=%lu.%lu", status[i].pcTaskName,
+                       (unsigned long)(share / 10ULL),
+                       (unsigned long)(share % 10ULL));
+            }
+        }
+        printf("\n");
+    }
+
+    free(status);
+    return busy_percent;
+}
+#else
+static uint32_t app_cpu_busy_percent(bool log_tasks)
+{
+    (void)log_tasks;
+    return 0;
+}
+#endif
 
 static int app_mqtt_send_connect(void)
 {
@@ -236,10 +304,13 @@ void app_main(void)
         .image_stream_id = APP_IMAGE_STREAM_ID,
         .image_datagram_budget = APP_IMAGE_DATAGRAM_BUDGET,
         .control_period_ms = APP_CONTROL_PERIOD_MS,
+        .telemetry_deadline_ms = APP_DEADLINE_CLASS1_MS,
+        .image_deadline_ms = APP_DEADLINE_IMAGE_MS,
         .policy_mode = (qads_policy_mode_t)APP_QADS_POLICY_MODE,
     };
 
     printf("[APP]Starting aiot_quic firmware (MQTT over QUIC)\n");
+    printf("[APP]reset_reason=%d\n", (int)esp_reset_reason());
     fflush(stdout);
     printf("[APP]Wi-Fi connecting to SSID=%s host=%s\n", APP_WIFI_SSID, APP_PEER_HOST);
     fflush(stdout);
@@ -396,7 +467,9 @@ void app_main(void)
             esp_task_wdt_reset();
         }
 
-        if (g_mqtt_transport_ready && !g_mqtt_connected && APP_TRANSPORT_MODE != APP_TRANSPORT_MODE_DATAGRAM_ONLY) {
+        // All transport modes establish the MQTT session over a stream before
+        // the data plane starts (control channel is stream-only by design).
+        if (g_mqtt_transport_ready && !g_mqtt_connected) {
             vTaskDelay(pdMS_TO_TICKS(APP_CONTROL_PERIOD_MS));
             continue;
         }
@@ -415,6 +488,8 @@ void app_main(void)
         metrics.tx_queue_depth = g_networkContext.route_queue ? (uint32_t)uxQueueMessagesWaiting(g_networkContext.route_queue) : 0;
         metrics.handshake_time_ms = quic_client_get_handshake_time_ms();
         metrics.quic_ready = quic_client_is_connected();
+        metrics.stream_window_available = quic_client_local_stream_avail() != 0;
+        metrics.cpu_usage = app_cpu_busy_percent((loop_count % 100) == 0);
         metrics.heap_free = esp_get_free_heap_size();
         metrics.heap_caps = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
         metrics.main_stack_hwm = (uint32_t)uxTaskGetStackHighWaterMark(NULL);
@@ -424,7 +499,10 @@ void app_main(void)
         metrics.stream_send_ok = g_networkContext.stream_send_ok;
         metrics.stream_send_fail = g_networkContext.stream_send_fail;
         metrics.datagrams_sent = g_networkContext.datagram_send_ok;
-        metrics.datagrams_lost = g_networkContext.datagram_send_fail;
+        uint32_t dgram_acked = 0;
+        quic_client_get_datagram_stats(&dgram_acked, &metrics.datagrams_lost);
+        metrics.datagram_expired = g_networkContext.datagram_expired;
+        metrics.datagram_evicted = g_networkContext.datagram_evicted;
         g_networkContext.main_stack_hwm = metrics.main_stack_hwm;
 
         if (packet.type == DATA_TYPE_IMAGE) {
@@ -498,7 +576,10 @@ void app_main(void)
                         for (uint32_t burst = 0; burst < burst_count; ++burst) {
                             mqtt_quic_transport_send_hybrid(&g_networkContext,
                                                             tinyml_mode,
-                                                            tmp, datagram_len, 0);
+                                                            tmp, datagram_len,
+                                                            AIOT_TRACK_AI_RESULT,
+                                                            packet.priority,
+                                                            APP_DEADLINE_CLASS1_MS);
                             if (APP_STRESS_INTER_BURST_DELAY_MS > 0 && burst + 1U < burst_count) {
                                 vTaskDelay(pdMS_TO_TICKS(APP_STRESS_INTER_BURST_DELAY_MS));
                             }
@@ -520,7 +601,8 @@ void app_main(void)
             continue;
         }
 
-        schedule_decision_t decision = dl_qads_decide(&g_scheduler, &packet, &metrics);
+        schedule_decision_t decision = dl_qads_decide(&g_scheduler, &packet, &metrics,
+                                                      (uint64_t)esp_timer_get_time());
 
         if (decision.mode == TX_MODE_DROP) {
             app_log_decision(&packet, &metrics, &decision, NULL);
@@ -528,25 +610,46 @@ void app_main(void)
             continue;
         }
 
-        if (packet.type != DATA_TYPE_IMAGE && APP_TRANSPORT_MODE == APP_TRANSPORT_MODE_DATAGRAM_ONLY) {
-            mqtt_quic_transport_send_hybrid(&g_networkContext,
-                                            DELIVERY_UNRELIABLE,
-                                            packet.payload,
-                                            packet.payload_len,
-                                            0);
-        } else if (packet.type != DATA_TYPE_IMAGE && g_mqtt_connected) {
-            uint8_t topic[] = "aiot/telemetry";
-            static uint16_t pid = 1;
-            MQTTPublishInfo_t pub = {
-                .qos = MQTTQoS0,
-                .pTopicName = (const char *)topic,
-                .topicNameLength = (uint16_t)sizeof(topic) - 1,
-                .pPayload = (const void *)packet.payload,
-                .payloadLength = packet.payload_len,
-            };
-            if (MQTT_Publish(&g_mqttContext, &pub, pid++) != MQTTSuccess) {
-                ESP_LOGW(TAG, "MQTT publish failed type=%d seq=%lu",
-                         packet.type, (unsigned long)packet.sequence);
+        if (packet.type != DATA_TYPE_IMAGE) {
+            bool use_datagram;
+#if APP_TRANSPORT_MODE == APP_TRANSPORT_MODE_DATAGRAM_ONLY
+            use_datagram = true;
+#elif APP_TRANSPORT_MODE == APP_TRANSPORT_MODE_STREAM_ONLY
+            use_datagram = false;
+#else
+            // Hybrid: the scheduler's forwarding preference is authoritative.
+            use_datagram = (decision.mode == TX_MODE_DATAGRAM);
+#endif
+            if (decision.mode == TX_MODE_DEFER && APP_TRANSPORT_MODE == APP_TRANSPORT_MODE_HYBRID) {
+                app_log_decision(&packet, &metrics, &decision, NULL);
+                vTaskDelay(pdMS_TO_TICKS(APP_CONTROL_PERIOD_MS));
+                continue;
+            }
+
+            if (use_datagram) {
+                mqtt_quic_transport_send_hybrid(&g_networkContext,
+                                                DELIVERY_UNRELIABLE,
+                                                packet.payload,
+                                                packet.payload_len,
+                                                AIOT_TRACK_TELEMETRY,
+                                                packet.priority,
+                                                decision.delivery_timeout_ms != 0U
+                                                    ? decision.delivery_timeout_ms
+                                                    : APP_DEADLINE_CLASS1_MS);
+            } else if (g_mqtt_connected) {
+                uint8_t topic[] = "aiot/telemetry";
+                static uint16_t pid = 1;
+                MQTTPublishInfo_t pub = {
+                    .qos = MQTTQoS0,
+                    .pTopicName = (const char *)topic,
+                    .topicNameLength = (uint16_t)sizeof(topic) - 1,
+                    .pPayload = (const void *)packet.payload,
+                    .payloadLength = packet.payload_len,
+                };
+                if (MQTT_Publish(&g_mqttContext, &pub, pid++) != MQTTSuccess) {
+                    ESP_LOGW(TAG, "MQTT publish failed type=%d seq=%lu",
+                             packet.type, (unsigned long)packet.sequence);
+                }
             }
         }
 
