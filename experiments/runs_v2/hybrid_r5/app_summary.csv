@@ -1,0 +1,4 @@
+dgram_fail,dgram_ok,handshake_ms,heap_free,loop,min_heap_8bit,rtt_ms,stream_fail,stream_ok,txq,txq_max
+0,98,2260,8283672,100,8274571,165,0,2,0,0
+0,198,2260,8283672,200,8274571,220,0,2,0,0
+0,298,2260,8281896,300,8274571,198,0,2,0,0
