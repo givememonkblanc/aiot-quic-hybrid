@@ -1,6 +1,9 @@
 #!/bin/bash
 cd /home/ryzen395/aiot_quic_baseline/host_receiver
 mkdir -p qlog_dir
+# Per-datagram receiver log (12B aiot_object header parse) — set per rep, e.g.:
+#   AIOT_DGRAM_LOG=dgram_hybrid_r1.csv ./run_server.sh
+export AIOT_DGRAM_LOG="${AIOT_DGRAM_LOG:-dgram_recv.csv}"
 ./picoquic/picoquicdemo \
   -p 14567 \
   -c /home/ryzen395/aiot_quic_baseline/host_receiver/certs/cert.pem \

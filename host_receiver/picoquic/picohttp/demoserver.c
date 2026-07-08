@@ -39,6 +39,72 @@
 static const char* bad_request_message = "<html><head><title>Bad Request</title></head><body>Bad request. Why don't you try \"GET /456789\"?</body></html>";
 static const uint8_t mqtt_connack[] = { 0x20, 0x02, 0x00, 0x00 };
 
+/*
+ * Receiver-side datagram log for the AIoT MQTT-over-QUIC experiments.
+ * Every QUIC DATAGRAM carries a 12-byte object header (see firmware
+ * src/components/common/include/aiot_object.h, little-endian):
+ *   magic_ver(0xA1) track_id priority flags object_seq(u32) gen_ts_ms(u32)
+ * Each datagram is appended to a CSV so per-track loss (seq gaps),
+ * reordering and age-of-information can be computed offline.
+ * Path override: AIOT_DGRAM_LOG env var; default ./dgram_recv.csv.
+ */
+#define AIOT_OBJECT_MAGIC_VER 0xA1U
+#define AIOT_OBJECT_HEADER_SIZE 12U
+
+static FILE* mqtt_dgram_log_file = NULL;
+static int mqtt_dgram_log_failed = 0;
+
+static void picoquic_mqtt_log_datagram(picoquic_cnx_t* cnx, const uint8_t* bytes, size_t length)
+{
+    uint64_t recv_us = picoquic_current_time();
+    picoquic_connection_id_t icid = picoquic_get_initial_cnxid(cnx);
+    char cid_hex[2 * PICOQUIC_CONNECTION_ID_MAX_SIZE + 1];
+    size_t cid_len = (icid.id_len < PICOQUIC_CONNECTION_ID_MAX_SIZE) ? icid.id_len : PICOQUIC_CONNECTION_ID_MAX_SIZE;
+
+    if (mqtt_dgram_log_file == NULL) {
+        if (mqtt_dgram_log_failed) {
+            return;
+        }
+        else {
+            const char* path = getenv("AIOT_DGRAM_LOG");
+            if (path == NULL || path[0] == 0) {
+                path = "dgram_recv.csv";
+            }
+            mqtt_dgram_log_file = fopen(path, "a");
+            if (mqtt_dgram_log_file == NULL) {
+                fprintf(stderr, "Cannot open datagram log %s\n", path);
+                mqtt_dgram_log_failed = 1;
+                return;
+            }
+            if (ftell(mqtt_dgram_log_file) == 0) {
+                fprintf(mqtt_dgram_log_file,
+                    "recv_us,cid,valid,track_id,priority,flags,object_seq,gen_ts_ms,payload_len\n");
+            }
+        }
+    }
+
+    for (size_t i = 0; i < cid_len; i++) {
+        (void)sprintf(&cid_hex[2 * i], "%02x", icid.id[i]);
+    }
+    cid_hex[2 * cid_len] = 0;
+
+    if (length >= AIOT_OBJECT_HEADER_SIZE && bytes[0] == AIOT_OBJECT_MAGIC_VER) {
+        uint32_t object_seq = (uint32_t)bytes[4] | ((uint32_t)bytes[5] << 8) |
+            ((uint32_t)bytes[6] << 16) | ((uint32_t)bytes[7] << 24);
+        uint32_t gen_ts_ms = (uint32_t)bytes[8] | ((uint32_t)bytes[9] << 8) |
+            ((uint32_t)bytes[10] << 16) | ((uint32_t)bytes[11] << 24);
+        fprintf(mqtt_dgram_log_file, "%" PRIu64 ",%s,1,%u,%u,%u,%u,%u,%zu\n",
+            recv_us, cid_hex, bytes[1], bytes[2], bytes[3], object_seq, gen_ts_ms,
+            length - AIOT_OBJECT_HEADER_SIZE);
+    }
+    else {
+        /* v1 firmware or unframed payload: keep the arrival for rate stats */
+        fprintf(mqtt_dgram_log_file, "%" PRIu64 ",%s,0,0,0,0,0,0,%zu\n",
+            recv_us, cid_hex, length);
+    }
+    fflush(mqtt_dgram_log_file);
+}
+
 int picoquic_mqtt_server_callback(picoquic_cnx_t* cnx,
     uint64_t stream_id, uint8_t* bytes, size_t length,
     picoquic_call_back_event_t fin_or_event, void* callback_ctx, void* v_stream_ctx)
@@ -61,6 +127,11 @@ int picoquic_mqtt_server_callback(picoquic_cnx_t* cnx,
         if (length > 0 && bytes != NULL && ((bytes[0] >> 4) & 0x0F) == 1) {
             return picoquic_add_to_stream_with_ctx(cnx, stream_id,
                 mqtt_connack, sizeof(mqtt_connack), 0, NULL);
+        }
+        return 0;
+    case picoquic_callback_datagram:
+        if (bytes != NULL) {
+            picoquic_mqtt_log_datagram(cnx, bytes, length);
         }
         return 0;
     default:
