@@ -35,11 +35,21 @@ TINYML_FIELDS = [
     "pacing_level",
 ]
 
+# Appended by newer firmware; absent in logs captured before the MOQT-profile
+# upgrade, so they are filled only when present.
+TINYML_OPTIONAL_FIELDS = [
+    "datagram_expired",
+    "datagram_evicted",
+]
+
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 KV_RE = re.compile(r"([A-Za-z0-9_]+)=([^,\s]+)")
 LOG_TIME_RE = re.compile(r"[A-Z] \((\d+)\)")
 TX_RE = re.compile(
     r"\[(STREAM|DATAGRAM)\]\s+src=([A-Za-z0-9_]+)\s+len=(\d+)\s+qwait_us=(\d+)\s+send_us=(\d+)\s+e2e_us=(\d+)\s+depth=(\d+)\s+ret=(-?\d+)"
+)
+SHED_RE = re.compile(
+    r"\[(EXPIRED|EVICTED)\]\s+track=(\d+)\s+seq=(\d+)\s+age_us=(-?\d+)"
 )
 
 
@@ -61,7 +71,8 @@ def parse_tinyml(line: str) -> dict[str, str] | None:
     parts = [part.strip() for part in payload.split(",")]
     if len(parts) < len(TINYML_FIELDS):
         return None
-    row = {name: parts[index] for index, name in enumerate(TINYML_FIELDS)}
+    all_fields = TINYML_FIELDS + TINYML_OPTIONAL_FIELDS
+    row = {name: value for name, value in zip(all_fields, parts)}
     row.update(extra)
     return row
 
@@ -82,6 +93,27 @@ def parse_tx(line: str) -> dict[str, str] | None:
         "e2e_us": e2e,
         "depth": depth,
         "ret": ret,
+    }
+
+
+def parse_shed(line: str) -> dict[str, str] | None:
+    match = SHED_RE.search(line)
+    if not match:
+        return None
+    time_match = LOG_TIME_RE.search(line)
+    kind, track, seq, age_us = match.groups()
+    return {
+        "log_time_ms": time_match.group(1) if time_match else "",
+        "mode": kind.lower(),
+        "source": "queue",
+        "len": "",
+        "qwait_us": age_us,
+        "send_us": "",
+        "e2e_us": "",
+        "depth": "",
+        "ret": "",
+        "track": track,
+        "seq": seq,
     }
 
 
@@ -123,13 +155,17 @@ def main() -> int:
             if tx is not None:
                 tx_rows.append(tx)
                 continue
+            shed = parse_shed(line)
+            if shed is not None:
+                tx_rows.append(shed)
+                continue
             summary = parse_summary(line)
             if summary is not None:
                 summary_rows.append(summary)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    write_csv(args.out_dir / "telemetry.csv", telemetry_rows, TINYML_FIELDS + ["ai", "backend", "det"])
-    write_csv(args.out_dir / "tx_events.csv", tx_rows, ["log_time_ms", "mode", "source", "len", "qwait_us", "send_us", "e2e_us", "depth", "ret"])
+    write_csv(args.out_dir / "telemetry.csv", telemetry_rows, TINYML_FIELDS + TINYML_OPTIONAL_FIELDS + ["ai", "backend", "det"])
+    write_csv(args.out_dir / "tx_events.csv", tx_rows, ["log_time_ms", "mode", "source", "len", "qwait_us", "send_us", "e2e_us", "depth", "ret", "track", "seq"])
 
     summary_keys = sorted({key for row in summary_rows for key in row})
     if summary_keys:
