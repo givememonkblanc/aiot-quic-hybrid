@@ -10,6 +10,7 @@ ROOT=/home/ryzen395/aiot_quic_baseline
 CFG=$ROOT/src/main/app_config.h
 IFACE=wlp194s0
 SECS=${SECS:-45}
+REPS=${REPS:-5}   # repetitions per condition (statistical: mean +/- CI)
 export PATH="$PATH"
 source /home/ryzen395/esp-idf/export.sh >/dev/null 2>&1
 
@@ -71,9 +72,11 @@ for MODE in "${MODES[@]}"; do
     else
       NETEM_ARGS="$ARGS" sudo -n NETEM_ARGS="$ARGS" "$ROOT/experiments/netem_stress.sh" "$VERB" "$IFACE" >/dev/null 2>&1
     fi
-    "$ROOT/experiments/run_v2_rep.sh" "sweep_${MODE}_${LBL}" 1 "$SECS" \
-        >> "$ROOT/experiments/runs_v2/sweep_run.log" 2>&1 \
-        && echo "  ok: sweep_${MODE}_${LBL}_r1" || echo "  FAIL: sweep_${MODE}_${LBL}_r1"
+    for rep in $(seq 1 "$REPS"); do
+      "$ROOT/experiments/run_v2_rep.sh" "sweep_${MODE}_${LBL}" "$rep" "$SECS" \
+          >> "$ROOT/experiments/runs_v2/sweep_run.log" 2>&1 \
+          && echo "  ok: sweep_${MODE}_${LBL}_r${rep}" || echo "  FAIL: sweep_${MODE}_${LBL}_r${rep}"
+    done
     sudo -n "$ROOT/experiments/netem_stress.sh" off "$IFACE" >/dev/null 2>&1
   done
 done

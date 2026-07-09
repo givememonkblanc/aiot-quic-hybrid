@@ -103,14 +103,20 @@ def main():
             cache[(m, c)] = [v for v in vs if v]
     for key, label in METRICS:
         print(f"\n### {label}")
-        hdr = f"{'cond':<9}" + "".join(f"{m.replace('_only',''):>14}" for m in MODES)
+        hdr = f"{'cond':<9}" + "".join(f"{m.replace('_only',''):>16}" for m in MODES)
         print(hdr + "\n" + "-" * len(hdr))
         for c in CONDS:
             cells = []
             for m in MODES:
                 vals = [v[key] for v in cache[(m, c)] if v.get(key) is not None]
-                cells.append(str(round(st.mean(vals), 1)) if vals else "-")
-            print(f"{c:<9}" + "".join(f"{x:>14}" for x in cells))
+                if not vals:
+                    cells.append("-")
+                elif len(vals) == 1:
+                    cells.append(f"{vals[0]:.1f}(n=1)")
+                else:
+                    # mean +/- sample std; n reps
+                    cells.append(f"{st.mean(vals):.1f}±{st.stdev(vals):.1f}")
+            print(f"{c:<9}" + "".join(f"{x:>16}" for x in cells))
 
 
 if __name__ == "__main__":
