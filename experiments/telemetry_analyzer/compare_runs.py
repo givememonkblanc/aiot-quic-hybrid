@@ -110,6 +110,7 @@ def summarize_run(run_dir: Path) -> dict[str, float]:
 
 
 METRIC_ORDER = [
+    ("reps", "Reps aggregated", "{:.0f}"),
     ("telemetry_samples", "Telemetry samples", "{:.0f}"),
     ("duration_s", "Duration (s)", "{:.1f}"),
     ("handshake_ms", "Handshake (ms)", "{:.0f}"),
@@ -161,11 +162,19 @@ def main() -> int:
             label, path_str = spec.split("=", 1)
         else:
             label, path_str = Path(spec).name, spec
-        run_dir = Path(path_str)
-        if not (run_dir / "telemetry.csv").exists():
-            parser.error(f"{run_dir} does not contain telemetry.csv")
+        # A label may aggregate several rep directories (comma separated or a
+        # glob): metrics are computed per rep, then averaged.
+        run_dirs: list[Path] = []
+        for part in path_str.split(","):
+            matches = sorted(Path().glob(part)) if any(ch in part for ch in "*?[") else [Path(part)]
+            run_dirs.extend(matches)
+        run_dirs = [d for d in run_dirs if (d / "telemetry.csv").exists()]
+        if not run_dirs:
+            parser.error(f"{path_str} matched no directory containing telemetry.csv")
         labels.append(label)
-        summaries[label] = summarize_run(run_dir)
+        per_rep = [summarize_run(d) for d in run_dirs]
+        summaries[label] = {key: safe_mean(rep[key] for rep in per_rep) for key in per_rep[0]}
+        summaries[label]["reps"] = float(len(per_rep))
 
     table = render_markdown(labels, summaries)
     print(table)

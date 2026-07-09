@@ -10,7 +10,7 @@ ROOT=/home/ryzen395/aiot_quic_baseline
 RUNDIR=$ROOT/experiments/runs_v2/${LABEL}_r${REP}
 mkdir -p "$RUNDIR"
 
-pkill -f picoquicdemo 2>/dev/null
+pkill -x picoquicdemo 2>/dev/null
 sleep 1
 
 AIOT_DGRAM_LOG="$RUNDIR/dgram_recv.csv" "$ROOT/host_receiver/run_server.sh" \
@@ -26,7 +26,10 @@ python3 "$ROOT/experiments/capture_serial.py" --reset --seconds "$SECS" \
     --out "$RUNDIR/monitor.log"
 CAPTURE_RC=$?
 
+# run_server.sh is a bash wrapper: kill the wrapper AND the picoquicdemo
+# child, which otherwise survives as an orphan holding port 14567
 kill "$SERVER_PID" 2>/dev/null
+pkill -x picoquicdemo 2>/dev/null
 wait "$SERVER_PID" 2>/dev/null
 [ "$CAPTURE_RC" -ne 0 ] && exit "$CAPTURE_RC"
 

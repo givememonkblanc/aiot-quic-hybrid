@@ -29,3 +29,20 @@ host_receiver/picoquic/valgrind_out.txt
 
 # Generated telemetry analyzer output
 experiments/telemetry_analyzer/output/
+
+# Product secrets (never commit real keys/certs)
+src/components/transport/server_ca.pem
+secure_boot_signing_key.pem
+*.pem.key
+nvs_keys.bin
+
+# sweep credentials (never commit)
+experiments/.sweep_secrets
+*.sweepbak
+*.prodbak
+
+# receiver runtime outputs
+host_receiver/aiot_feed.jsonl
+host_receiver/latest.jpg
+host_receiver/mqtt_events.csv
+host_receiver/*_dgram*.csv
