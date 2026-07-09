@@ -1,81 +1,94 @@
-# AIoT QUIC Hybrid Transport
+# AIoT Presence Sensor — MQTT-over-QUIC Hybrid Transport
 
-A network-aware, edge-AI telemetry transport architecture for MCU-based IoT devices using QUIC and MQTT over QUIC. This project demonstrates how to decouple high-priority control/telemetry traffic from loss-tolerant edge AI payloads (like image/inference results) using a Hybrid Stream/Datagram approach over a single QUIC connection.
+An edge-AI **presence-detection device** (존재감지장치) for MCU-class hardware
+(ESP32-S3 + OV2640), built on a network-aware MQTT-over-QUIC transport that
+routes each traffic class to the QUIC service its semantics require. On-device
+TinyML decides `present`/`absent`; a single QUIC connection carries reliable
+control/events on **streams** and loss-tolerant telemetry/snapshots on
+**datagrams**, protecting the control channel under congestion.
 
-## 🚀 Features
+> This repository has two faces that share one transport:
+> a **product** (default) and a **research/experiment** harness. See
+> **[docs/PRODUCT.md](docs/PRODUCT.md)** and
+> **[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)**.
 
-- **MQTT over QUIC**: Uses QUIC Streams for reliable MQTT control traffic (connect, subscribe, critical publish).
-- **Hybrid Transport Scheduler (`dl_qads`)**: Dynamically decides routing policies (`STREAM`, `DATAGRAM`, `DEFER`, `DROP`) based on real-time network metrics like RTT, queue depth, and loss.
-- **Edge AI / TinyML Integration**: Performs on-device image capture and TensorFlow Lite Micro (TFLM) inferences, sending results asynchronously via unreliable but fast QUIC Datagrams to prevent head-of-line blocking.
-- **Graceful Degradation**: Under severe stress (latency, packet loss, bandwidth limit), the system protects critical control streams while intentionally shedding low-priority AI/image datagrams.
+## Highlights
 
-## 📁 Repository Structure
+- **MQTT over QUIC** — control (CONNECT/SUBSCRIBE/PUBLISH) on reliable QUIC
+  streams; a normative rule of the design, since control on datagrams never
+  yields a CONNACK.
+- **Hybrid scheduler (`dl_qads`)** — routes payloads STREAM / DATAGRAM / DEFER /
+  DROP from live RTT, queue depth, and loss, with MOQT-style per-object
+  delivery timeouts (age-of-information shedding).
+- **On-device TinyML** — TFLM/esp-nn inference on camera frames, debounced into
+  presence state with hysteresis.
+- **Product-grade lifecycle** — field provisioning (SoftAP portal + serial
+  console), NVS-backed config with no secrets in the image, a session
+  supervisor that reconnects with backoff, and OTA with rollback.
+
+## Quick start (product)
+
+```bash
+idf.py set-target esp32s3
+idf.py build flash monitor
+```
+
+An unprovisioned device boots into a Wi-Fi setup AP `AIoT-Presence-XXXX` →
+open <http://192.168.4.1/> and enter Wi-Fi + server. Or provision over the USB
+serial console (`set wifi.ssid …`, `save`, `reboot`). Full walkthrough:
+**[docs/PRODUCT.md](docs/PRODUCT.md)**.
+
+Reporting once provisioned:
+
+| Payload | Topic / track | QUIC service |
+|---|---|---|
+| Presence event (enter/exit) | `aiot/presence/event` | stream (reliable, ordered) |
+| Heartbeat (state, score, RSSI, heap) | telemetry track | datagram + delivery timeout |
+| Snapshot JPEG on enter | image track | datagram chunks, loss-tolerant |
+| Commands (OTA, …) | `aiot/<device_id>/cmd` | stream (subscribe) |
+
+## Repository structure
 
 ```
-├── firmware/                        # Pre-compiled partitions/SDK configs
-├── host_receiver/                   # Host-side QUIC testing/logging server (picoquic)
-├── experiments/                     # Evaluation scripts, logs, and telemetry analyzers
-├── data/                            # Collected datasets & telemetry captures
 ├── src/
-│   ├── main/                        # App orchestration, mode selection, QUIC-MQTT bindings
-│   ├── components/
-│   │   ├── ai_inference/            # TFLM and esp-nn wrapper logic
-│   │   ├── common/                  # Packet and telemetry metric structures
-│   │   ├── dl_qads/                 # The core transport policy/scheduler
-│   │   ├── esp_camera/              # ESP32 camera driver
-│   │   ├── esp-http3/               # HTTP/3 QUIC library (wolfssl/ngtcp2)
-│   │   ├── sources/                 # Camera and sensor payload generator
-│   │   ├── transport/               # Hybrid transport enqueuer & QUIC stream/datagram TX task
-│   │   └── wifi_link/               # Wi-Fi connection manager
-│   └── managed_components/          # ESP-IDF registry managed components
+│   ├── main/                 # app orchestration; product & experiment entry points
+│   └── components/
+│       ├── presence/         # presence state machine (host-testable, no ESP deps)
+│       ├── app_cfg/          # NVS-backed device configuration
+│       ├── provisioning/     # SoftAP setup portal + serial console
+│       ├── ota/              # esp_https_ota update + rollback confirm
+│       ├── dl_qads/          # transport policy / scheduler
+│       ├── transport/        # hybrid stream/datagram TX + QUIC (ngtcp2/wolfssl)
+│       ├── ai_inference/     # TFLM / esp-nn wrappers
+│       ├── esp_camera/, sources/, wifi_link/, common/
+├── host_receiver/            # picoquic MQTT+datagram logging server
+├── experiments/              # evaluation harness & datasets (research side)
+├── docs/                     # PRODUCT.md, EXPERIMENTS.md
+├── partitions.csv            # default (single factory app)
+├── partitions_ota.csv        # OTA-capable 2-slot layout
+└── sdkconfig.prod            # production hardening fragment (OTA, TLS, secure boot)
 ```
 
-## 🧠 System Architecture
+## Configuration
 
-1. **Source Generation**: `source_manager` continuously captures camera frames or sensors.
-2. **On-Device Inference**: `ai_inference_run()` parses JPEG chunks and returns TinyML metadata.
-3. **Policy Engine (`dl_qads`)**: App evaluates the network state. Highly critical MQTT traffic is bound to QUIC Streams. AI/Image payload decisions fall back to QUIC Datagrams when the network is congested, prioritizing data freshness.
-4. **Execution Layer**: `mqtt_quic_transport_send_hybrid` pushes payloads to a TX queue. The background network worker transmits them using `quic_client_write_safe` (Stream) or `quic_client_write_datagram_safe` (Datagram).
+Compile-time defaults live in `src/main/app_config.h` (Wi-Fi/server default to
+`REPLACE_ME`; the live values come from NVS provisioning). `APP_PRODUCT_MODE`
+selects product (1, default) vs experiment (0) builds.
 
-## 🛠️ Configuration & Setup
+## Security
 
-1. Configure your network and receiver host settings in `src/main/app_config.h`:
-   ```c
-   #define APP_WIFI_SSID "YOUR_SSID"
-   #define APP_WIFI_PASSWORD "YOUR_PASSWORD"
-   #define APP_PEER_HOST "YOUR_QUIC_SERVER_IP"
-   ```
+Production checklist (details in [docs/PRODUCT.md](docs/PRODUCT.md#security)):
+QUIC server-cert pinning (drop `src/components/transport/server_ca.pem`), TLS
+for OTA, and — after validating on a sacrificial board — Secure Boot V2 + Flash
+Encryption from `sdkconfig.prod`. Real keys/certs are gitignored.
 
-2. Select a transport preset in `app_config.h`:
-   ```c
-   // Choose the operational mode:
-   #define APP_TRANSPORT_MODE APP_TRANSPORT_MODE_HYBRID
-   // Other options: APP_TRANSPORT_MODE_STREAM_ONLY, APP_TRANSPORT_MODE_DATAGRAM_ONLY
-   ```
+## Research & evaluation
 
-3. **Build and Flash** via ESP-IDF v5.x:
-   ```bash
-   idf.py build
-   idf.py flash monitor
-   ```
+The transport is the subject of a standardization paper; the evaluation
+harness, datasets, and the `APP_PRODUCT_MODE 0` build are documented in
+**[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)**.
 
-## 📊 Evaluation & Experiments
+## License
 
-The `experiments/` directory includes python analyzers and bash scripts to parse serial captures and evaluate:
-- **Telemetry Freshness (Latency)**
-- **Round-Trip Time (RTT)**
-- **Queue Saturation & Drop Rates**
-- **Throughput differences** between Stream-only, Datagram-only, and Hybrid configurations.
-
-See `experiments/telemetry_analyzer/README.md` for instructions on parsing and plotting test logs.
-
-## 📝 License
-
-This project integrates several open-source libraries:
-- **coreMQTT** (MIT)
-- **picoquic** / **picotls** (MIT)
-- **wolfSSL** (GPLv2)
-- **ngtcp2** (MIT)
-- **TensorFlow Lite Micro** (Apache 2.0)
-
-Please refer to individual component licenses in the `src/components/` and `host_receiver/` directories for complete details.
+Integrates coreMQTT (MIT), picoquic/picotls (MIT), wolfSSL (GPLv2), ngtcp2
+(MIT), and TensorFlow Lite Micro (Apache 2.0). See per-component licenses.
