@@ -134,3 +134,36 @@ bool aiot_ai_result_parse(const uint8_t *payload, uint16_t payload_len, aiot_ai_
 
     return true;
 }
+
+static uint8_t aiot_ai_result_max_confidence(const aiot_ai_result_t *r)
+{
+    uint8_t m = 0U;
+
+    if (r == NULL) {
+        return 0U;
+    }
+    for (uint8_t i = 0; i < r->detection_count && i < AIOT_AI_RESULT_MAX_DETECTIONS; ++i) {
+        if (r->detections[i].confidence > m) {
+            m = r->detections[i].confidence;
+        }
+    }
+    return m;
+}
+
+aiot_importance_t aiot_importance_from_result(const aiot_ai_result_t *cur,
+                                              const aiot_ai_result_t *prev)
+{
+    bool cur_det = (cur != NULL) && (cur->detection_count > 0U);
+    bool prev_det = (prev != NULL) && (prev->detection_count > 0U);
+
+    /* A change in detection state (enter/exit) is the most salient event. */
+    if (cur_det != prev_det) {
+        return AIOT_IMPORTANCE_CRITICAL;
+    }
+    if (cur_det) {
+        return (aiot_ai_result_max_confidence(cur) >= AIOT_IMPORTANCE_HIGH_CONF)
+                   ? AIOT_IMPORTANCE_CRITICAL
+                   : AIOT_IMPORTANCE_ELEVATED;
+    }
+    return AIOT_IMPORTANCE_ROUTINE;
+}

@@ -21,6 +21,7 @@ typedef struct {
     aiot_ai_result_t last_result;
     bool last_ran;              /* inference actually executed this frame */
     uint32_t last_inference_us; /* wall-clock of the last inference run */
+    uint8_t last_importance;    /* aiot_importance_t of the last frame */
 } source_manager_t;
 
 void source_manager_init(source_manager_t *manager);

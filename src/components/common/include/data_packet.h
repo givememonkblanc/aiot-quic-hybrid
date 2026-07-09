@@ -9,6 +9,18 @@ typedef enum {
     DATA_TYPE_IMAGE = 2,
 } data_type_t;
 
+/*
+ * Semantic importance of a payload, derived from the AI result (cross-layer
+ * hint from the perception layer to the transport scheduler). ROUTINE traffic
+ * is shed/degraded first under pressure; CRITICAL traffic (a state change or a
+ * high-confidence detection) is kept reliable and never AoI-shed.
+ */
+typedef enum {
+    AIOT_IMPORTANCE_ROUTINE = 0,   /* steady state, no salient detection */
+    AIOT_IMPORTANCE_ELEVATED = 1,  /* detection present, moderate confidence */
+    AIOT_IMPORTANCE_CRITICAL = 2,  /* enter/exit transition or high-confidence hit */
+} aiot_importance_t;
+
 typedef struct {
     data_type_t type;
     uint32_t sequence;
@@ -18,6 +30,7 @@ typedef struct {
     uint8_t priority;
     uint8_t deadline_class;
     bool loss_tolerant;
+    uint8_t importance;            /* aiot_importance_t; perception -> transport hint */
     const uint8_t *payload;
 } data_packet_t;
 

@@ -185,6 +185,7 @@ static void source_manager_run_inference(source_manager_t *manager,
         aiot_ai_result_init(&result, AIOT_AI_BACKEND_NONE, source_sequence);
         manager->last_ran = false;
         manager->last_inference_us = 0U;
+        manager->last_importance = (uint8_t)AIOT_IMPORTANCE_ROUTINE;
         source_manager_store_ai_result(manager, &result);
         return;
     }
@@ -202,6 +203,10 @@ static void source_manager_run_inference(source_manager_t *manager,
         aiot_ai_result_init(&result, AIOT_AI_BACKEND_HEURISTIC, source_sequence);
     }
 
+    /* Cross-layer hint: compare against the previous result (still in
+     * last_result) before it is overwritten, then publish the importance. */
+    manager->last_importance =
+        (uint8_t)aiot_importance_from_result(&result, &manager->last_result);
     source_manager_store_ai_result(manager, &result);
 }
 
@@ -287,6 +292,7 @@ bool source_manager_next_packet(source_manager_t *manager, data_packet_t *packet
             packet->priority = 0;
             packet->deadline_class = 0;
             packet->loss_tolerant = false;
+            packet->importance = manager->last_importance;
             packet->payload = manager->ai_payload.data;
             packet->payload_len = manager->ai_payload.len;
             return true;
@@ -330,6 +336,7 @@ bool source_manager_next_packet(source_manager_t *manager, data_packet_t *packet
             packet->priority = 1;
             packet->deadline_class = 1;
             packet->loss_tolerant = true;
+            packet->importance = manager->last_importance;
             packet->payload = g_image_buffer;
             packet->payload_len = jpeg_len;
             ESP_LOGD(TAG, "Image: %zu bytes", jpeg_len);

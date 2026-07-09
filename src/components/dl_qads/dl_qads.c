@@ -101,20 +101,27 @@ void dl_qads_init(dl_qads_t *scheduler, const dl_qads_config_t *config)
     scheduler->config = *config;
 }
 
-schedule_decision_t dl_qads_decide(const dl_qads_t *scheduler, const data_packet_t *packet,
-                                   const net_metrics_t *metrics, uint64_t now_us)
+static schedule_decision_t dl_qads_decide_core(const dl_qads_t *scheduler, const data_packet_t *packet,
+                                               const net_metrics_t *metrics, uint64_t now_us)
 {
     uint32_t datagram_budget = metrics->datagram_budget;
 
-    if (packet_past_useful_life(scheduler, packet, metrics, now_us)) {
+    // Never AoI-shed a CRITICAL payload (state change / high-confidence hit);
+    // routine and elevated traffic still yields link budget under congestion.
+    if (packet->importance < (uint8_t)AIOT_IMPORTANCE_CRITICAL &&
+        packet_past_useful_life(scheduler, packet, metrics, now_us)) {
         return make_drop_decision(3);
     }
 
     if (packet->type == DATA_TYPE_AI_RESULT) {
-        // Adaptive forwarding preference: telemetry rides the reliable stream
-        // while the network is healthy, but degrades to datagrams under
-        // congestion so it never queues behind retransmissions.
+        // Adaptive forwarding preference: routine telemetry rides the reliable
+        // stream while healthy, but degrades to datagrams under congestion so it
+        // never queues behind retransmissions. A salient detection (ELEVATED+)
+        // keeps the reliable stream even under congestion — the perception layer
+        // tells the transport this result is worth protecting.
+        bool salient = packet->importance >= (uint8_t)AIOT_IMPORTANCE_ELEVATED;
         if (scheduler->config.policy_mode != QADS_POLICY_RELIABILITY_BIASED &&
+            !salient &&
             metrics->quic_ready &&
             network_congested(metrics)) {
             return make_datagram_decision(2, scheduler->config.telemetry_deadline_ms);
@@ -181,7 +188,7 @@ schedule_decision_t dl_qads_decide(const dl_qads_t *scheduler, const data_packet
         }
     }
 
-    if (metrics->loss_percent > 20U) {
+    if (metrics->loss_percent > 20U && packet->importance < (uint8_t)AIOT_IMPORTANCE_CRITICAL) {
         return make_drop_decision(3);
     }
 
@@ -195,4 +202,12 @@ schedule_decision_t dl_qads_decide(const dl_qads_t *scheduler, const data_packet
 
     return make_datagram_decision((metrics->rtt_ms > 80U) ? 3U : 2U,
                                   packet_deadline_ms(scheduler, packet));
+}
+
+schedule_decision_t dl_qads_decide(const dl_qads_t *scheduler, const data_packet_t *packet,
+                                   const net_metrics_t *metrics, uint64_t now_us)
+{
+    schedule_decision_t decision = dl_qads_decide_core(scheduler, packet, metrics, now_us);
+    decision.importance = packet->importance;  // echo for logging/observability
+    return decision;
 }

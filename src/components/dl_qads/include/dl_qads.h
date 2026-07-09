@@ -24,6 +24,7 @@ typedef struct {
     uint8_t pacing_level;
     uint8_t retransmit_allowed;
     uint8_t drop_allowed;
+    uint8_t importance;            // aiot_importance_t echoed from the packet
     uint16_t delivery_timeout_ms;  // MOQT delivery-timeout analog; 0 = no expiry
 } schedule_decision_t;
 
