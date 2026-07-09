@@ -54,6 +54,125 @@ static const uint8_t mqtt_connack[] = { 0x20, 0x02, 0x00, 0x00 };
 static FILE* mqtt_dgram_log_file = NULL;
 static int mqtt_dgram_log_failed = 0;
 
+/*
+ * Unified JSON-lines feed for the AIoT product backend/dashboard. Captures the
+ * actual payloads (retained registration/state/availability PUBLISHes and the
+ * heartbeat datagrams) so a backend can tail one file. Independent of the CSV
+ * experiment logs above. Path override: AIOT_FEED_LOG (default aiot_feed.jsonl).
+ */
+static FILE* aiot_feed_file = NULL;
+static int aiot_feed_failed = 0;
+
+static void aiot_feed_json_string(FILE* f, const uint8_t* s, size_t len)
+{
+    /* Emit s as a JSON string body (no surrounding quotes), escaped. */
+    for (size_t i = 0; i < len; i++) {
+        int ch = s[i];
+        if (ch == '"' || ch == '\\') {
+            fprintf(f, "\\%c", ch);
+        } else if (ch == '\n') {
+            fprintf(f, "\\n");
+        } else if (ch == '\r') {
+            fprintf(f, "\\r");
+        } else if (ch == '\t') {
+            fprintf(f, "\\t");
+        } else if (ch < 0x20) {
+            fprintf(f, "\\u%04x", (unsigned)ch);
+        } else {
+            fputc(ch, f);
+        }
+    }
+}
+
+static FILE* aiot_feed_open(void)
+{
+    if (aiot_feed_file != NULL || aiot_feed_failed) {
+        return aiot_feed_file;
+    }
+    const char* path = getenv("AIOT_FEED_LOG");
+    if (path == NULL || path[0] == 0) {
+        path = "aiot_feed.jsonl";
+    }
+    aiot_feed_file = fopen(path, "a");
+    if (aiot_feed_file == NULL) {
+        fprintf(stderr, "Cannot open AIoT feed %s\n", path);
+        aiot_feed_failed = 1;
+    }
+    return aiot_feed_file;
+}
+
+/*
+ * Live-view image reassembly. The firmware streams JPEG frames on the IMAGE
+ * track (track_id 3) as chunked datagrams; we reassemble SOI..EOI into whole
+ * JPEGs and atomically publish the latest one to AIOT_IMAGE_OUT (default
+ * latest.jpg) for the backend's MJPEG endpoint. Single-device product setup,
+ * so one global buffer is enough. Lost chunks corrupt a frame; we resync on
+ * the next Start-Of-Image marker.
+ */
+#define AIOT_TRACK_IMAGE_ID 3U
+#define AIOT_IMG_MAX 262144
+static uint8_t aiot_img_buf[AIOT_IMG_MAX];
+static size_t aiot_img_len;
+
+static void aiot_image_write(const uint8_t* buf, size_t len)
+{
+    const char* path = getenv("AIOT_IMAGE_OUT");
+    if (path == NULL || path[0] == 0) {
+        path = "latest.jpg";
+    }
+    char tmp[512];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    FILE* f = fopen(tmp, "wb");
+    if (f == NULL) {
+        return;
+    }
+    fwrite(buf, 1, len, f);
+    fclose(f);
+    rename(tmp, path);   /* atomic swap so readers never see a partial frame */
+}
+
+static void aiot_image_reassemble(const uint8_t* payload, size_t len)
+{
+    if (len == 0) {
+        return;
+    }
+    if (aiot_img_len + len > AIOT_IMG_MAX) {
+        aiot_img_len = 0;   /* overflow (missed an EOI): drop and resync */
+    }
+    memcpy(aiot_img_buf + aiot_img_len, payload, len);
+    aiot_img_len += len;
+
+    /* Trim anything before the Start-Of-Image marker. */
+    size_t soi = (size_t)-1;
+    for (size_t i = 0; i + 1 < aiot_img_len; i++) {
+        if (aiot_img_buf[i] == 0xFF && aiot_img_buf[i + 1] == 0xD8) {
+            soi = i;
+            break;
+        }
+    }
+    if (soi == (size_t)-1) {
+        if (aiot_img_len > 1) {         /* keep last byte: FF may straddle chunks */
+            aiot_img_buf[0] = aiot_img_buf[aiot_img_len - 1];
+            aiot_img_len = 1;
+        }
+        return;
+    }
+    if (soi > 0) {
+        memmove(aiot_img_buf, aiot_img_buf + soi, aiot_img_len - soi);
+        aiot_img_len -= soi;
+    }
+    /* Complete frame once we see End-Of-Image. */
+    for (size_t i = 2; i + 1 < aiot_img_len; i++) {
+        if (aiot_img_buf[i] == 0xFF && aiot_img_buf[i + 1] == 0xD9) {
+            size_t frame_len = i + 2;
+            aiot_image_write(aiot_img_buf, frame_len);
+            memmove(aiot_img_buf, aiot_img_buf + frame_len, aiot_img_len - frame_len);
+            aiot_img_len -= frame_len;
+            break;
+        }
+    }
+}
+
 static void picoquic_mqtt_log_datagram(picoquic_cnx_t* cnx, const uint8_t* bytes, size_t length)
 {
     uint64_t recv_us = picoquic_current_time();
@@ -96,6 +215,20 @@ static void picoquic_mqtt_log_datagram(picoquic_cnx_t* cnx, const uint8_t* bytes
         fprintf(mqtt_dgram_log_file, "%" PRIu64 ",%s,1,%u,%u,%u,%u,%u,%zu\n",
             recv_us, cid_hex, bytes[1], bytes[2], bytes[3], object_seq, gen_ts_ms,
             length - AIOT_OBJECT_HEADER_SIZE);
+        FILE* feed = aiot_feed_open();
+        if (feed != NULL) {
+            fprintf(feed, "{\"t\":%" PRIu64 ",\"cid\":\"%s\",\"kind\":\"datagram\",\"track\":%u,"
+                "\"seq\":%u,\"gen_ts_ms\":%u,\"payload\":\"",
+                recv_us, cid_hex, bytes[1], object_seq, gen_ts_ms);
+            aiot_feed_json_string(feed, bytes + AIOT_OBJECT_HEADER_SIZE,
+                length - AIOT_OBJECT_HEADER_SIZE);
+            fprintf(feed, "\"}\n");
+            fflush(feed);
+        }
+        if (bytes[1] == AIOT_TRACK_IMAGE_ID) {
+            aiot_image_reassemble(bytes + AIOT_OBJECT_HEADER_SIZE,
+                                  length - AIOT_OBJECT_HEADER_SIZE);
+        }
     }
     else {
         /* v1 firmware or unframed payload: keep the arrival for rate stats */
@@ -103,6 +236,193 @@ static void picoquic_mqtt_log_datagram(picoquic_cnx_t* cnx, const uint8_t* bytes
             recv_us, cid_hex, length);
     }
     fflush(mqtt_dgram_log_file);
+}
+
+/*
+ * Minimal MQTT 3.1.1 stream parser for the AIoT presence-sensor product.
+ * Reassembles MQTT packets across QUIC stream frames per connection and:
+ *   CONNECT  -> CONNACK
+ *   PINGREQ  -> PINGRESP (keepalive support)
+ *   PUBLISH  -> appended to CSV (AIOT_MQTT_LOG env, default mqtt_events.csv);
+ *               bulk topics (aiot/image) are logged topic+length only.
+ */
+#define MQTT_PARSE_MAX_CNX 8
+#define MQTT_PARSE_BUF_SIZE 4096
+
+static const uint8_t mqtt_pingresp[] = { 0xD0, 0x00 };
+
+typedef struct {
+    picoquic_cnx_t* cnx;
+    size_t buf_len;
+    uint8_t buf[MQTT_PARSE_BUF_SIZE];
+} mqtt_parse_slot_t;
+
+static mqtt_parse_slot_t mqtt_parse_slots[MQTT_PARSE_MAX_CNX];
+static FILE* mqtt_event_log_file = NULL;
+static int mqtt_event_log_failed = 0;
+
+static mqtt_parse_slot_t* mqtt_parse_slot(picoquic_cnx_t* cnx)
+{
+    mqtt_parse_slot_t* free_slot = NULL;
+    for (int i = 0; i < MQTT_PARSE_MAX_CNX; i++) {
+        if (mqtt_parse_slots[i].cnx == cnx) {
+            return &mqtt_parse_slots[i];
+        }
+        if (mqtt_parse_slots[i].cnx == NULL && free_slot == NULL) {
+            free_slot = &mqtt_parse_slots[i];
+        }
+    }
+    if (free_slot == NULL) {
+        /* recycle the first slot; product setups have a single device */
+        free_slot = &mqtt_parse_slots[0];
+    }
+    free_slot->cnx = cnx;
+    free_slot->buf_len = 0;
+    return free_slot;
+}
+
+static void mqtt_parse_slot_release(picoquic_cnx_t* cnx)
+{
+    for (int i = 0; i < MQTT_PARSE_MAX_CNX; i++) {
+        if (mqtt_parse_slots[i].cnx == cnx) {
+            mqtt_parse_slots[i].cnx = NULL;
+            mqtt_parse_slots[i].buf_len = 0;
+        }
+    }
+}
+
+static void picoquic_mqtt_log_publish(picoquic_cnx_t* cnx, const char* topic,
+    size_t topic_len, const uint8_t* payload, size_t payload_len)
+{
+    if (mqtt_event_log_file == NULL) {
+        if (mqtt_event_log_failed) {
+            return;
+        }
+        const char* path = getenv("AIOT_MQTT_LOG");
+        if (path == NULL || path[0] == 0) {
+            path = "mqtt_events.csv";
+        }
+        mqtt_event_log_file = fopen(path, "a");
+        if (mqtt_event_log_file == NULL) {
+            fprintf(stderr, "Cannot open MQTT event log %s\n", path);
+            mqtt_event_log_failed = 1;
+            return;
+        }
+        if (ftell(mqtt_event_log_file) == 0) {
+            fprintf(mqtt_event_log_file, "recv_us,cid,topic,payload_len,payload\n");
+        }
+    }
+
+    picoquic_connection_id_t icid = picoquic_get_initial_cnxid(cnx);
+    char cid_hex[2 * PICOQUIC_CONNECTION_ID_MAX_SIZE + 1];
+    size_t cid_len = (icid.id_len < PICOQUIC_CONNECTION_ID_MAX_SIZE) ? icid.id_len : PICOQUIC_CONNECTION_ID_MAX_SIZE;
+    for (size_t i = 0; i < cid_len; i++) {
+        (void)sprintf(&cid_hex[2 * i], "%02x", icid.id[i]);
+    }
+    cid_hex[2 * cid_len] = 0;
+
+    int is_bulk = (topic_len >= 10 && memcmp(topic, "aiot/image", 10) == 0);
+    fprintf(mqtt_event_log_file, "%" PRIu64 ",%s,%.*s,%zu,\"",
+        picoquic_current_time(), cid_hex, (int)topic_len, topic, payload_len);
+    if (!is_bulk) {
+        size_t log_len = payload_len < 512 ? payload_len : 512;
+        for (size_t i = 0; i < log_len; i++) {
+            int ch = payload[i];
+            if (ch == '"') {
+                fputs("\"\"", mqtt_event_log_file);
+            } else if (ch >= 0x20 && ch < 0x7f) {
+                fputc(ch, mqtt_event_log_file);
+            } else {
+                fprintf(mqtt_event_log_file, "\\x%02x", (unsigned)ch);
+            }
+        }
+    }
+    fputs("\"\n", mqtt_event_log_file);
+    fflush(mqtt_event_log_file);
+
+    FILE* feed = aiot_feed_open();
+    if (feed != NULL) {
+        fprintf(feed, "{\"t\":%" PRIu64 ",\"cid\":\"%s\",\"kind\":\"publish\",\"topic\":\"",
+            picoquic_current_time(), cid_hex);
+        aiot_feed_json_string(feed, (const uint8_t*)topic, topic_len);
+        fprintf(feed, "\",\"payload\":\"");
+        if (!is_bulk) {
+            aiot_feed_json_string(feed, payload, payload_len < 512 ? payload_len : 512);
+        }
+        fprintf(feed, "\"}\n");
+        fflush(feed);
+    }
+}
+
+/* Returns the total packet length when the buffer holds a complete MQTT
+ * packet, 0 when more data is needed, (size_t)-1 on malformed input. */
+static size_t mqtt_packet_length(const uint8_t* buf, size_t len)
+{
+    if (len < 2) {
+        return 0;
+    }
+    size_t remaining = 0;
+    size_t shift = 0;
+    size_t pos = 1;
+    for (;;) {
+        if (pos >= len) {
+            return 0;
+        }
+        uint8_t byte = buf[pos++];
+        remaining |= (size_t)(byte & 0x7f) << shift;
+        if ((byte & 0x80) == 0) {
+            break;
+        }
+        shift += 7;
+        if (shift > 21) {
+            return (size_t)-1;
+        }
+    }
+    return pos + remaining;
+}
+
+static int picoquic_mqtt_handle_packet(picoquic_cnx_t* cnx, uint64_t stream_id,
+    const uint8_t* pkt, size_t pkt_len)
+{
+    uint8_t type = (pkt[0] >> 4) & 0x0F;
+
+    switch (type) {
+    case 1: /* CONNECT */
+        return picoquic_add_to_stream_with_ctx(cnx, stream_id,
+            mqtt_connack, sizeof(mqtt_connack), 0, NULL);
+    case 12: /* PINGREQ */
+        return picoquic_add_to_stream_with_ctx(cnx, stream_id,
+            mqtt_pingresp, sizeof(mqtt_pingresp), 0, NULL);
+    case 3: { /* PUBLISH (QoS 0) */
+        uint8_t qos = (pkt[0] >> 1) & 0x03;
+        /* skip fixed header */
+        size_t pos = 1;
+        while (pos < pkt_len && (pkt[pos] & 0x80) != 0) {
+            pos++;
+        }
+        pos++;
+        if (pos + 2 > pkt_len) {
+            return 0;
+        }
+        size_t topic_len = ((size_t)pkt[pos] << 8) | pkt[pos + 1];
+        pos += 2;
+        if (pos + topic_len > pkt_len) {
+            return 0;
+        }
+        const char* topic = (const char*)&pkt[pos];
+        pos += topic_len;
+        if (qos > 0) {
+            pos += 2; /* packet identifier */
+        }
+        if (pos > pkt_len) {
+            return 0;
+        }
+        picoquic_mqtt_log_publish(cnx, topic, topic_len, &pkt[pos], pkt_len - pos);
+        return 0;
+    }
+    default:
+        return 0;
+    }
 }
 
 int picoquic_mqtt_server_callback(picoquic_cnx_t* cnx,
@@ -116,17 +436,44 @@ int picoquic_mqtt_server_callback(picoquic_cnx_t* cnx,
     case picoquic_callback_almost_ready:
     case picoquic_callback_ready:
     case picoquic_callback_version_negotiation:
-    case picoquic_callback_close:
-    case picoquic_callback_application_close:
     case picoquic_callback_stateless_reset:
     case picoquic_callback_stop_sending:
     case picoquic_callback_stream_reset:
         return 0;
+    case picoquic_callback_close:
+    case picoquic_callback_application_close:
+        mqtt_parse_slot_release(cnx);
+        return 0;
     case picoquic_callback_stream_data:
     case picoquic_callback_stream_fin:
-        if (length > 0 && bytes != NULL && ((bytes[0] >> 4) & 0x0F) == 1) {
-            return picoquic_add_to_stream_with_ctx(cnx, stream_id,
-                mqtt_connack, sizeof(mqtt_connack), 0, NULL);
+        if (length > 0 && bytes != NULL) {
+            mqtt_parse_slot_t* slot = mqtt_parse_slot(cnx);
+            if (slot->buf_len + length > sizeof(slot->buf)) {
+                /* overflow: drop buffered state, try to resync on next packet */
+                slot->buf_len = 0;
+                if (length > sizeof(slot->buf)) {
+                    return 0;
+                }
+            }
+            memcpy(slot->buf + slot->buf_len, bytes, length);
+            slot->buf_len += length;
+
+            for (;;) {
+                size_t pkt_len = mqtt_packet_length(slot->buf, slot->buf_len);
+                if (pkt_len == 0) {
+                    break; /* need more data */
+                }
+                if (pkt_len == (size_t)-1) {
+                    slot->buf_len = 0; /* malformed: resync */
+                    break;
+                }
+                if (pkt_len > slot->buf_len) {
+                    break; /* incomplete */
+                }
+                (void)picoquic_mqtt_handle_packet(cnx, stream_id, slot->buf, pkt_len);
+                memmove(slot->buf, slot->buf + pkt_len, slot->buf_len - pkt_len);
+                slot->buf_len -= pkt_len;
+            }
         }
         return 0;
     case picoquic_callback_datagram:
