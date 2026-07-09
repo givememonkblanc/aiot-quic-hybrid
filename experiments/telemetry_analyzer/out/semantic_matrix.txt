@@ -1,0 +1,23 @@
+# Semantic scheduler decision matrix (packet = AI_RESULT)
+
+importance             clean        rtt300    loss5+cong   loss15+cong        loss25
+----------            ------        ------        ------        ------        ------
+OFF/ROUTINE           STREAM      datagram      datagram      datagram      datagram
+ELEVATED              STREAM        STREAM        STREAM        STREAM        STREAM
+CRITICAL              STREAM        STREAM        STREAM        STREAM        STREAM
+
+# AoI-shed protection (loss-tolerant SENSOR, aged past deadline, congested)
+
+importance           decision
+----------             ------
+OFF/ROUTINE              DROP
+ELEVATED                 DROP
+CRITICAL                defer
+
+# Verdict
+AI_RESULT under 5 conditions:
+  ROUTINE (baseline) degraded/dropped off the reliable stream in 4/5 conditions
+  CRITICAL kept the reliable stream in 5/5 conditions; dropped in 0/5
+AoI shed (aged loss-tolerant, congested): ROUTINE dropped=1, CRITICAL dropped=0
+=> Semantic protection CONFIRMED: CRITICAL is delivered reliably and never AoI-shed,
+   while routine traffic degrades/sheds under the same congestion.

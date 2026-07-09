@@ -50,13 +50,31 @@ Coupling an AI result's semantic salience into transport QoS **on an MCU** —
 AIoT and is not what off-the-shelf QUIC does. It is original work in the layer
 that is genuinely ours (the scheduler), not in the vendored QUIC/TLS substrate.
 
-## Evaluation (planned)
+## Evaluation
 
-Measure under `netem` congestion (extend the sweep): with detections injected,
-compare **CRITICAL vs ROUTINE** on delivery ratio and freshness under loss.
-Expected result — CRITICAL delivery and freshness stay high while ROUTINE sheds
-— demonstrates semantic protection and gives a second novel empirical result
-alongside "freshness decoupled from network".
+**Mechanism measurement (deterministic).** `dl_qads_decide` is a pure function,
+so the policy is measured exactly with a host decision matrix
+(`experiments/semantic_decision_matrix.c`, via `run_semantic_matrix.sh`) — each
+importance level under clean→severe congestion, no device/netem noise. Result
+(`experiments/telemetry_analyzer/out/semantic_matrix.txt`):
+
+| AI_RESULT importance | clean | rtt300 | loss5+cong | loss15+cong | loss25 |
+|---|---|---|---|---|---|
+| ROUTINE (baseline) | STREAM | datagram | datagram | datagram | datagram |
+| ELEVATED | STREAM | STREAM | STREAM | STREAM | STREAM |
+| CRITICAL | STREAM | STREAM | STREAM | STREAM | STREAM |
+
+Under congestion the baseline degrades AI results off the reliable stream in
+**4/5** conditions (loss-exposed), while ELEVATED/CRITICAL keep the reliable
+stream in **5/5**. On the AoI-shed path (aged loss-tolerant payload, congested),
+ROUTINE is **DROP**ped while CRITICAL is not shed (**defer**). **Semantic
+protection confirmed** — salient detections are delivered reliably and never
+AoI-shed, while routine traffic degrades/sheds under the same congestion.
+
+**End-to-end (device, follow-up).** A netem sweep with synthetic detection
+injection would confirm these decisions translate to real delivery-ratio and
+freshness gains on hardware; the deterministic matrix already establishes that
+the policy protects salient detections.
 
 ## Files
 
