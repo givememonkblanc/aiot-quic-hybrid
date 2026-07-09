@@ -52,15 +52,16 @@ Reporting once provisioned:
 ```
 ├── src/
 │   ├── main/                 # app orchestration; product & experiment entry points
-│   └── components/
-│       ├── presence/         # presence state machine (host-testable, no ESP deps)
-│       ├── app_cfg/          # NVS-backed device configuration
-│       ├── provisioning/     # SoftAP setup portal + serial console
-│       ├── ota/              # esp_https_ota update + rollback confirm
-│       ├── dl_qads/          # transport policy / scheduler
-│       ├── transport/        # hybrid stream/datagram TX + QUIC (ngtcp2/wolfssl)
-│       ├── ai_inference/     # TFLM / esp-nn wrappers
-│       ├── esp_camera/, sources/, wifi_link/, common/
+│   ├── components/           # FIRST-PARTY only
+│   │   ├── presence/         # presence state machine (host-testable, no ESP deps)
+│   │   ├── app_cfg/          # NVS-backed device configuration
+│   │   ├── provisioning/     # SoftAP setup portal + serial console
+│   │   ├── ota/              # esp_https_ota update + rollback confirm
+│   │   ├── dl_qads/          # transport policy / scheduler
+│   │   ├── transport/        # hybrid stream/datagram TX (QUIC via third_party)
+│   │   ├── ai_inference/     # TFLM / esp-nn wrappers
+│   │   └── sources/, wifi_link/, common/, status_led/
+│   └── third_party/          # VENDORED: wolfssl, ngtcp2, coreMQTT, esp-http3, esp_camera
 ├── host_receiver/            # picoquic MQTT+datagram logging server
 ├── experiments/              # evaluation harness & datasets (research side)
 ├── docs/                     # PRODUCT.md, EXPERIMENTS.md
@@ -68,6 +69,38 @@ Reporting once provisioned:
 ├── partitions_ota.csv        # OTA-capable 2-slot layout
 └── sdkconfig.prod            # production hardening fragment (OTA, TLS, secure boot)
 ```
+
+## What's ours vs vendored
+
+This repo is **~96% third-party by size** — `wolfssl` alone is ~50 MB — because a
+TLS/QUIC/TinyML substrate is large and off-the-shelf. Size is the wrong ruler.
+The contribution is a compact layer of **integration, product, and measurement**
+on that substrate, not the substrate itself.
+
+**Ours** — ~11k lines of first-party code:
+
+| Area | LOC | What it is |
+|---|---|---|
+| `transport/` + `dl_qads/` | ~2.9k | hybrid stream/datagram routing, freshness-first (AoI) shedding, the scheduler — the design's **novel core** |
+| `main/` | ~2.0k | product + experiment orchestration |
+| `ai_inference/` | ~1.1k | TFLM integration (classification / FOMO / motion paths) |
+| presence · provisioning · ota · app_cfg · status_led | ~1.3k | product plumbing |
+| `backend/` + `experiments/` | ~2.9k | dashboards, netem sweep, analyzers |
+
+Much of `transport/` is glue that wires ngtcp2 into ESP-IDF; the genuinely novel
+code is small (the routing decision + the `dl_qads` scheduler + the measurement
+methodology). That is normal for applied systems work.
+
+**Vendored** — `src/third_party/` (upstream, unmodified except one patch):
+wolfSSL (local `WOLFSSL_QUIC` patch), ngtcp2, coreMQTT, esp-http3, esp32-camera;
+plus managed deps (TFLM, esp-nn, esp_jpeg) and picoquic on the host. Provenance
+and the wolfSSL patch are documented in
+**[src/third_party/README.md](src/third_party/README.md)**.
+
+**So the contribution is architecture + evidence, not a new stack.** The novel
+results — sender freshness staying ~constant under RTT/loss, and datagrams
+costing *more* CPU than streams on an MCU — come from the integration and the
+measurement, not from reimplementing QUIC.
 
 ## Configuration
 
