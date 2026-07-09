@@ -77,8 +77,15 @@ benefit. (R2: "QUIC intrinsically avoids HoL" — the baseline demonstrates it.)
 
 ## Implementation plan (effort-ordered)
 
-1. `mqtt_tcp_transport.{c,h}` — esp-tls send/recv, `TransportInterface`. *(firmware, ~1 day)*
-2. `APP_TRANSPORT_BACKEND` flag + route objects as PUBLISH in TCP mode. *(firmware)*
+1. ✅ *(written, build-pending)* `mqtt_tcp_transport.{c,h}` — esp-tls send/recv +
+   connect/disconnect implementing coreMQTT's `TransportInterface`, with its own
+   `struct NetworkContext`. Not yet wired into the build (the sweep holds it);
+   esp-tls non-blocking/WANT_READ handling still needs on-target verification.
+2. `APP_TRANSPORT_BACKEND` flag; in `app_main`, include the TCP header instead of
+   the QUIC one, and — the real work — **route the data plane through
+   `MQTT_Publish`** instead of `send_hybrid`/datagrams (telemetry, AI result,
+   image chunks as PUBLISH on their topics). This is more than a transport swap
+   because the QUIC data plane bypasses coreMQTT.
 3. Host: mosquitto config (TLS) + logging subscriber emitting the QUIC CSV schema. *(host, ~½ day)*
 4. Sweep harness `backend` axis + point device to the right receiver. *(script)*
 5. `analyze_sweep.py`: add backend to the comparison; produce TCP-vs-QUIC table.
