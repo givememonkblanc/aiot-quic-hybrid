@@ -250,7 +250,28 @@ static int client_ssl_init(struct client *c) {
   }
 
   wolfSSL_CTX_UseSNI(c->ssl_ctx, WOLFSSL_SNI_HOST_NAME, g_config.hostname, strlen(g_config.hostname) + 1);
+
+#if defined(APP_QUIC_VERIFY_PEER) && APP_QUIC_VERIFY_PEER
+  /* Verify the QUIC server against the embedded CA. Enabled automatically
+   * when a server_ca.pem is dropped into components/transport/ (see the
+   * component CMakeLists, which embeds it and defines APP_QUIC_VERIFY_PEER). */
+  extern const uint8_t server_ca_pem_start[] asm("_binary_server_ca_pem_start");
+  extern const uint8_t server_ca_pem_end[]   asm("_binary_server_ca_pem_end");
+  if (wolfSSL_CTX_load_verify_buffer(c->ssl_ctx, server_ca_pem_start,
+                                     (long)(server_ca_pem_end - server_ca_pem_start),
+                                     WOLFSSL_FILETYPE_PEM) != WOLFSSL_SUCCESS) {
+    ESP_LOGE(TAG, "failed to load embedded server CA for QUIC verification");
+    return -1;
+  }
+  wolfSSL_CTX_set_verify(c->ssl_ctx, WOLFSSL_VERIFY_PEER, NULL);
+  ESP_LOGI(TAG, "QUIC server certificate verification ENABLED");
+#else
+  /* Development / experiment default: the server is not authenticated. Drop a
+   * server_ca.pem into components/transport/ for a production build. */
   wolfSSL_CTX_set_verify(c->ssl_ctx, WOLFSSL_VERIFY_NONE, NULL);
+  ESP_LOGW(TAG, "QUIC server certificate NOT verified (insecure). Add "
+                "components/transport/server_ca.pem for a production build.");
+#endif
 
   c->ssl = SSL_new(c->ssl_ctx);
   if (!c->ssl) {
@@ -908,6 +929,7 @@ static ssize_t client_write_application_data(struct client *c, const uint8_t *da
     ngtcp2_path_storage_zero(&ps);
 
     bool retry = false;
+    int blocked_iters = 0;
     do {
       ngtcp2_tstamp ts = timestamp();
       ngtcp2_ssize nwrite = ngtcp2_conn_writev_stream(c->conn, &ps.path, &pi, buf, sizeof(buf),
@@ -935,6 +957,21 @@ static ssize_t client_write_application_data(struct client *c, const uint8_t *da
       if (nwrite == 0)
       {
         ESP_LOGI(TAG, "Cannot send QUIC packet with %zu bytes, stream data: %zu bytes", (size_t)nwrite, (size_t)wdatalen);
+        // nwrite == 0 with wdatalen == -1 means the stream is blocked
+        // (flow control or cwnd). Spinning on writev alone livelocks: the
+        // MAX_STREAM_DATA / ACK that would unblock us is sitting unread in
+        // the socket. Process inbound packets and the expiry timer while
+        // blocked, and give up after ~2s so the producer pipeline degrades
+        // to a failed send instead of stalling forever.
+        if (++blocked_iters > 200) {
+          ESP_LOGW(TAG, "Stream write blocked >2s, giving up");
+          return -1;
+        }
+        (void)client_read(c);
+        if (ngtcp2_conn_get_expiry(c->conn) <= timestamp()) {
+          (void)client_handle_expiry(c);
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
       }
 
       // retry when NO STREAM Frame is sent
@@ -1315,10 +1352,24 @@ int quic_client_read_safe(uint8_t *buffer, size_t buffer_size, size_t *bytes_rea
     
     int result = client_read_application_data(&g_client, buffer, buffer_size, bytes_read);
     ESP_LOGI(TAG, "quic_client_read_safe: result=%d bytes_read=%zu", result, *bytes_read);
-    
+
+    // Drive loss detection even when the app only polls reads (e.g. while
+    // waiting for CONNACK): without this a lost packet is never
+    // retransmitted because nothing runs the ngtcp2 expiry timer.
+    if (g_client.conn != NULL &&
+        !ngtcp2_conn_in_closing_period(g_client.conn) &&
+        !ngtcp2_conn_in_draining_period(g_client.conn) &&
+        ngtcp2_conn_get_expiry(g_client.conn) <= timestamp()) {
+        if (client_handle_expiry(&g_client) == 0) {
+            (void)client_write(&g_client);
+        } else {
+            ESP_LOGE(TAG, "client_handle_expiry (read path) failed");
+        }
+    }
+
     // Release mutex
     xSemaphoreGive(quic_mutex);
-    
+
     return result;
 }
 

@@ -90,7 +90,8 @@ static camera_config_t camera_config = {
     .ledc_timer = LEDC_TIMER_0,
     .ledc_channel = LEDC_CHANNEL_0,
     .pixel_format = PIXFORMAT_JPEG,
-    .frame_size = FRAMESIZE_QVGA,
+    .frame_size = FRAMESIZE_QQVGA,   /* 160x120: small JPEG fits the 8KB buffers
+                                        and a few stream chunks; reliable live view */
     .jpeg_quality = 12,
     .fb_count = 1,
     .fb_location = CAMERA_FB_IN_DRAM,
@@ -145,6 +146,20 @@ static void source_manager_store_ai_result(source_manager_t *manager,
     manager->ai_payload.len = aiot_ai_result_serialize(result,
         manager->ai_payload.data,
         (uint16_t)sizeof(manager->ai_payload.data));
+    manager->last_result = *result;
+}
+
+bool source_manager_get_last_ai_result(const source_manager_t *manager,
+    aiot_ai_result_t *out, uint32_t *inference_us)
+{
+    if (manager == NULL || out == NULL) {
+        return false;
+    }
+    *out = manager->last_result;
+    if (inference_us != NULL) {
+        *inference_us = manager->last_inference_us;
+    }
+    return manager->last_ran;
 }
 
 static void source_manager_set_empty_ai_result(source_manager_t *manager, uint32_t source_sequence)
@@ -168,15 +183,20 @@ static void source_manager_run_inference(source_manager_t *manager,
                  (unsigned)(jpeg ? jpeg[0] : 0U),
                  (unsigned)(jpeg ? jpeg[1] : 0U));
         aiot_ai_result_init(&result, AIOT_AI_BACKEND_NONE, source_sequence);
+        manager->last_ran = false;
+        manager->last_inference_us = 0U;
         source_manager_store_ai_result(manager, &result);
         return;
     }
 
+    uint64_t t0 = source_manager_now_us();
     bool has_detection = ai_inference_run(&g_inference,
         jpeg,
         jpeg_len,
         source_sequence,
         &result);
+    manager->last_inference_us = (uint32_t)(source_manager_now_us() - t0);
+    manager->last_ran = has_detection;
 
     if (!has_detection) {
         aiot_ai_result_init(&result, AIOT_AI_BACKEND_HEURISTIC, source_sequence);
@@ -194,7 +214,12 @@ void source_manager_init(source_manager_t *manager)
     ai_inference_get_capabilities(&capabilities);
     source_manager_set_empty_ai_result(manager, 0U);
 
-#if defined(ESP_IDF_VERSION_MAJOR) && ESP_IDF_VERSION_MAJOR >= 4
+    /* Keep the camera framebuffer in PSRAM when the chip has it, freeing
+     * scarce internal DRAM for task stacks (the network TX task needs 16KB).
+     * This used to sit behind an `#if defined(ESP_IDF_VERSION_MAJOR)` guard
+     * that was always false (the version header wasn't included), so the fb
+     * silently stayed in DRAM and starved the transport task on the larger
+     * product build. heap_caps_get_total_size is available on IDF v4+. */
     if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0U) {
         camera_config.fb_location = CAMERA_FB_IN_PSRAM;
         camera_config.fb_count = 1;
@@ -202,7 +227,6 @@ void source_manager_init(source_manager_t *manager)
         camera_config.fb_location = CAMERA_FB_IN_DRAM;
         camera_config.fb_count = 1;
     }
-#endif
 
     ESP_LOGI(TAG,
         "Inference backend=%u model_available=%u tensor_arena=%lu model_input=%ux%u fb_location=%s fb_count=%u",

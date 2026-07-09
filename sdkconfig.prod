@@ -1,0 +1,38 @@
+# =============================================================================
+# Production hardening fragment for the presence-sensor product.
+#
+# Apply on top of sdkconfig.defaults, e.g.:
+#   idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.prod" \
+#          reconfigure build
+#
+# The Secure Boot and Flash Encryption options below burn one-way eFuses on
+# first boot and are IRREVERSIBLE. Read
+# https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/security/
+# and validate on a sacrificial board before enabling them on production units.
+# They are left commented out so this fragment is safe to build as-is.
+# =============================================================================
+
+# --- OTA + rollback ----------------------------------------------------------
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_ota.csv"
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_APP_PROJECT_VER_FROM_CONFIG=y
+CONFIG_APP_PROJECT_VER="1.0.0"
+
+# --- TLS: verify the OTA/HTTPS server against the built-in CA bundle ----------
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+
+# --- NVS encryption (encrypt the stored Wi-Fi password) ----------------------
+# Requires an `nvs_keys` partition and flash encryption; see docs/PRODUCT.md.
+# CONFIG_NVS_ENCRYPTION=y
+
+# --- Secure Boot V2 (RSA-3072) -- IRREVERSIBLE eFuse burn --------------------
+# CONFIG_SECURE_BOOT=y
+# CONFIG_SECURE_BOOT_V2_ENABLED=y
+# CONFIG_SECURE_SIGNED_APPS_RSA_SCHEME=y
+# CONFIG_SECURE_BOOT_SIGNING_KEY="secure_boot_signing_key.pem"
+
+# --- Flash Encryption (release mode) -- IRREVERSIBLE eFuse burn --------------
+# CONFIG_SECURE_FLASH_ENC_ENABLED=y
+# CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE=y

@@ -153,7 +153,9 @@ BaseType_t mqtt_quic_transport_init(NetworkContext_t *pNetworkContext,
     memset(pNetworkContext->object_seq_next, 0, sizeof(pNetworkContext->object_seq_next));
     pNetworkContext->main_stack_hwm = 0;
     pNetworkContext->net_tx_stack_hwm = 0;
-    pNetworkContext->route_queue = xQueueCreate(10, sizeof(iot_route_msg_t));
+    /* Deep enough to hold a whole streamed JPEG frame (several chunks) plus
+     * telemetry without evicting image chunks (which corrupts live frames). */
+    pNetworkContext->route_queue = xQueueCreate(48, sizeof(iot_route_msg_t));
     if (pNetworkContext->route_queue == NULL) {
         ESP_LOGE(TAG, "Failed to create route queue");
         return pdFAIL;

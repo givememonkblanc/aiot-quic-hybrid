@@ -63,7 +63,9 @@ typedef struct NetworkContext
     const ServerInfo_t *pServerInfo;
     const MQTTQUICConfig_t *pMqttQuicConfig;
     
-    uint8_t send_buffer[512];
+    /* Must hold one full MQTT packet: fixed header + topic + the largest
+     * publish payload (APP_IMAGE_CHUNK_SIZE image chunks in stream mode). */
+    uint8_t send_buffer[2048];
     size_t send_buffer_len;
     uint32_t expected_packet_length;
     bool packet_length_determined;

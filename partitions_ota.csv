@@ -1,0 +1,13 @@
+# OTA-capable 4MB layout for the presence-sensor product.
+# Two 1.9375MB app slots (product image is ~1.84MB, ~100KB headroom each)
+# + otadata. Activate with:  idf.py set-target esp32s3 ; set
+#   CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_ota.csv"
+# then a one-time `idf.py erase-flash flash` (repartition wipes NVS, so the
+# device re-enters the setup portal on next boot).
+# App slots start on 64KB boundaries as the bootloader requires.
+# Name,     Type, SubType,  Offset,   Size,     Flags
+nvs,        data, nvs,      0x9000,   0x4000,
+otadata,    data, ota,      0xd000,   0x2000,
+phy_init,   data, phy,      0xf000,   0x1000,
+ota_0,      app,  ota_0,    0x10000,  0x1F0000,
+ota_1,      app,  ota_1,    0x200000, 0x1F0000,
