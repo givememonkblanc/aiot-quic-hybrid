@@ -1,0 +1,90 @@
+
+### RTT avg (ms)
+cond             stream      datagram        hybrid
+---------------------------------------------------
+clean               273           207           194
+rtt100              420           300           292
+rtt300              620           528           512
+rtt500              791           719           705
+loss2               398           306           308
+loss10              438           301           316
+
+### RTT p95 (ms)
+cond             stream      datagram        hybrid
+---------------------------------------------------
+clean               574           445           403
+rtt100              663           524           520
+rtt300             1036           925           774
+rtt500             1051          1052          1062
+loss2               734           550           540
+loss10              882           549           608
+
+### Freshness e2e p95 (ms)
+cond             stream      datagram        hybrid
+---------------------------------------------------
+clean                59            56            56
+rtt100               59            56            56
+rtt300               59            56            56
+rtt500               59            56            56
+loss2                59            56            56
+loss10               59            56            56
+
+### Queue wait p95 (ms)
+cond             stream      datagram        hybrid
+---------------------------------------------------
+clean               0.0           0.1           0.1
+rtt100              0.0           0.1           0.1
+rtt300              0.0           0.1           0.1
+rtt500              0.0           0.1           0.1
+loss2               0.0           0.1           0.1
+loss10              0.0           0.1           0.1
+
+### Datagrams lost — ACK (count)
+cond             stream      datagram        hybrid
+---------------------------------------------------
+clean                 0             0             0
+rtt100                0             0             0
+rtt300                0             0             0
+rtt500                0             0             0
+loss2                 0             1             7
+loss10                0            11            14
+
+### Shed: expired+evicted (count)
+cond             stream      datagram        hybrid
+---------------------------------------------------
+clean                 0             0             0
+rtt100                0             0             0
+rtt300                0             0             0
+rtt500                0             0             0
+loss2                 0             0             0
+loss10                0             0             0
+
+### Stream send fail (count)
+cond             stream      datagram        hybrid
+---------------------------------------------------
+clean                 0             0             0
+rtt100                0             0             0
+rtt300                0             0             0
+rtt500                0             0             0
+loss2                 0             0             0
+loss10                0             0             0
+
+### Rx gap-loss % (telemetry track)
+cond             stream      datagram        hybrid
+---------------------------------------------------
+clean                 -           0.0           0.0
+rtt100                -           0.0           0.0
+rtt300                -           0.0           0.0
+rtt500                -           0.0           0.0
+loss2                 -           0.7           4.9
+loss10                -           8.4           9.3
+
+### AoI proxy — OWDV p95 (ms)
+cond             stream      datagram        hybrid
+---------------------------------------------------
+clean                 -          99.4         106.0
+rtt100                -          96.1          95.1
+rtt300                -          74.8          77.2
+rtt500                -          73.0          52.9
+loss2                 -         118.0          92.6
+loss10                -         127.1         105.7

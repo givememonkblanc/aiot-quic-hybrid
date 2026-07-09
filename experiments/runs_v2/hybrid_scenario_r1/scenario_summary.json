@@ -1,0 +1,38 @@
+{
+  "run": "hybrid_scenario_r1",
+  "phases": {
+    "normal": {
+      "tx_events": 112,
+      "tx_datagram": 111,
+      "tx_stream": 1,
+      "e2e_ms_avg": 52.88,
+      "e2e_ms_p95": 56.32,
+      "qwait_ms_avg": 0.044,
+      "qwait_ms_p95": 0.046,
+      "shed": 0
+    },
+    "burst": {
+      "tx_events": 168,
+      "tx_datagram": 84,
+      "tx_stream": 26,
+      "e2e_ms_avg": 160.88,
+      "e2e_ms_p95": 526.29,
+      "qwait_ms_avg": 178.798,
+      "qwait_ms_p95": 559.848,
+      "shed": 58
+    },
+    "recovery": {
+      "tx_events": 99,
+      "tx_datagram": 99,
+      "tx_stream": 0,
+      "e2e_ms_avg": 53.63,
+      "e2e_ms_p95": 56.63,
+      "qwait_ms_avg": 0.044,
+      "qwait_ms_p95": 0.046,
+      "shed": 0
+    }
+  },
+  "image_frames_tx": 28,
+  "image_chunks_tx": 112,
+  "shed_total": 58
+}

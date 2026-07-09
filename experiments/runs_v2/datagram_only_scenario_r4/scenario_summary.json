@@ -1,0 +1,38 @@
+{
+  "run": "datagram_only_scenario_r4",
+  "phases": {
+    "normal": {
+      "tx_events": 112,
+      "tx_datagram": 111,
+      "tx_stream": 1,
+      "e2e_ms_avg": 52.91,
+      "e2e_ms_p95": 56.34,
+      "qwait_ms_avg": 0.044,
+      "qwait_ms_p95": 0.047,
+      "shed": 0
+    },
+    "burst": {
+      "tx_events": 222,
+      "tx_datagram": 130,
+      "tx_stream": 0,
+      "e2e_ms_avg": 197.26,
+      "e2e_ms_p95": 492.79,
+      "qwait_ms_avg": 215.746,
+      "qwait_ms_p95": 527.895,
+      "shed": 92
+    },
+    "recovery": {
+      "tx_events": 101,
+      "tx_datagram": 101,
+      "tx_stream": 0,
+      "e2e_ms_avg": 53.4,
+      "e2e_ms_p95": 56.6,
+      "qwait_ms_avg": 0.044,
+      "qwait_ms_p95": 0.047,
+      "shed": 0
+    }
+  },
+  "image_frames_tx": 37,
+  "image_chunks_tx": 148,
+  "shed_total": 92
+}

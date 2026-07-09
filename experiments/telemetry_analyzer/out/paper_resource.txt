@@ -1,0 +1,28 @@
+
+==================================================================
+  RESOURCE / MODE  (normal 5-rep)
+==================================================================
+metric                           stream     datagram       hybrid
+-----------------------------------------------------------------
+reps                                  0            0            0
+CPU busy % (avg)                    0.0          0.0          0.0
+net_tx task CPU %                   0.0          0.0          0.0
+heap_free avg (KB)                    0            0            0
+heap_caps min (KB)                    0            0            0
+RTT valid avg (ms)                  0.0          0.0          0.0
+datagrams sent (avg)                  0            0            0
+stream sends (avg)                    0            0            0
+
+==================================================================
+  RESOURCE / MODE  (normal 5-rep_stress)
+==================================================================
+metric                           stream     datagram       hybrid
+-----------------------------------------------------------------
+reps                                  0            0            0
+CPU busy % (avg)                    0.0          0.0          0.0
+net_tx task CPU %                   0.0          0.0          0.0
+heap_free avg (KB)                    0            0            0
+heap_caps min (KB)                    0            0            0
+RTT valid avg (ms)                  0.0          0.0          0.0
+datagrams sent (avg)                  0            0            0
+stream sends (avg)                    0            0            0
