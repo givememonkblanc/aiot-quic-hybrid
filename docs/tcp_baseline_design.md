@@ -77,10 +77,12 @@ benefit. (R2: "QUIC intrinsically avoids HoL" — the baseline demonstrates it.)
 
 ## Implementation plan (effort-ordered)
 
-1. ✅ *(written, build-pending)* `mqtt_tcp_transport.{c,h}` — esp-tls send/recv +
+1. ✅ *(compile-verified)* `mqtt_tcp_transport.{c,h}` — esp-tls send/recv +
    connect/disconnect implementing coreMQTT's `TransportInterface`, with its own
-   `struct NetworkContext`. Not yet wired into the build (the sweep holds it);
-   esp-tls non-blocking/WANT_READ handling still needs on-target verification.
+   `struct NetworkContext`. Wired into the transport component (SRCS + esp-tls
+   REQUIRES) and builds cleanly on esp32s3 (mbedTLS backend). Runtime
+   non-blocking/WANT_READ semantics still need on-target testing (needs a broker
+   + the step-2 data-plane integration).
 2. `APP_TRANSPORT_BACKEND` flag; in `app_main`, include the TCP header instead of
    the QUIC one, and — the real work — **route the data plane through
    `MQTT_Publish`** instead of `send_hybrid`/datagrams (telemetry, AI result,

@@ -2,9 +2,10 @@
  * TCP+TLS transport for coreMQTT — non-QUIC baseline. See the header and
  * docs/tcp_baseline_design.md.
  *
- * STATUS: build-pending. This is written against the esp-tls API but has not
- * been compiled yet (the netem sweep is holding the build). The esp-tls
- * non-blocking / WANT_READ handling in particular must be verified on target.
+ * STATUS: compile-verified (builds cleanly against esp-tls/mbedTLS on esp32s3,
+ * linked into the image). NOT yet runtime-verified — the esp-tls non-blocking /
+ * WANT_READ read semantics need on-target testing once a broker + the app-side
+ * data-plane integration (route objects via MQTT_Publish) are in place.
  */
 
 #include "mqtt_tcp_transport.h"

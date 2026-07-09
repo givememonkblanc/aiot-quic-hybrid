@@ -7,10 +7,10 @@ if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/server_ca.pem")
 endif()
 
 idf_component_register(
-    SRCS "ngtcp2_sample.c" "esp_ev_compat.c" "mqtt_quic_transport.c"
+    SRCS "ngtcp2_sample.c" "esp_ev_compat.c" "mqtt_quic_transport.c" "mqtt_tcp_transport.c"
     INCLUDE_DIRS "."
     REQUIRES esp_timer core_mqtt
-    PRIV_REQUIRES esp-http3 ngtcp2
+    PRIV_REQUIRES esp-http3 ngtcp2 esp-tls
     EMBED_TXTFILES ${_embed_files}
 )
 
