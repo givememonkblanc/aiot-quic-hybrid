@@ -9,6 +9,9 @@
 typedef enum {
     AI_INFERENCE_OUTPUT_GENERIC = 0,
     AI_INFERENCE_OUTPUT_FOMO = 1,
+    /* Single-tensor softmax classifier (e.g. Visual Wake Words person
+     * detection). The score at target_class_index drives the detection. */
+    AI_INFERENCE_OUTPUT_CLASSIFICATION = 2,
 } ai_inference_output_type_t;
 
 typedef struct {
@@ -20,6 +23,9 @@ typedef struct {
     uint8_t detection_threshold;
     uint8_t class_count;
     uint8_t background_index;
+    /* For AI_INFERENCE_OUTPUT_CLASSIFICATION: output index whose score is the
+     * positive-class confidence (e.g. person index = 1). Ignored otherwise. */
+    uint8_t target_class_index;
     ai_inference_output_type_t output_type;
 } ai_inference_model_asset_t;
 

@@ -22,6 +22,11 @@ typedef struct {
     uint32_t decode_failures;
     uint32_t backend_fallbacks;
     uint32_t model_unavailable_count;
+    /* Per-instance previous frame for the motion detector. Must NOT be shared
+     * across instances: source_manager and app_main each run inference on the
+     * same frame, so a shared buffer makes every diff "frame vs itself" = 0. */
+    uint8_t prev_luma[AIOT_INFERENCE_INPUT_WIDTH * AIOT_INFERENCE_INPUT_HEIGHT];
+    uint32_t prev_luma_count;
 } ai_inference_t;
 
 typedef struct {

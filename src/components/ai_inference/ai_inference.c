@@ -4,14 +4,27 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "ai_inference_tflm.h"
 #include "jpeg_decoder.h"
 
 static const char *TAG = "ai_inference";
 
-#define AIOT_INFERENCE_RGB565_BYTES (AIOT_INFERENCE_INPUT_WIDTH * AIOT_INFERENCE_INPUT_HEIGHT * 2U)
+/*
+ * Decode the camera JPEG at full QQVGA (160x120) so the TinyML model gets real
+ * detail; ai_inference_tflm's fill_input_tensor then downsamples to the model's
+ * own input size (e.g. 96x96). Previously this decoded at 1/8 scale into a
+ * 40x30 buffer, feeding the classifier a ~20x15 thumbnail. The buffer lives in
+ * PSRAM (allocated once in ai_inference_init) to avoid internal DRAM pressure.
+ * The 40x30 AIOT_INFERENCE_INPUT_* constants are only the motion detector's
+ * subsample grid, independent of this decode resolution.
+ */
+#define AIOT_DECODE_WIDTH 160U
+#define AIOT_DECODE_HEIGHT 120U
+#define AIOT_DECODE_RGB565_BYTES (AIOT_DECODE_WIDTH * AIOT_DECODE_HEIGHT * 2U)
 
-static uint8_t g_decode_buffer[AIOT_INFERENCE_RGB565_BYTES];
+static uint8_t *g_decode_buffer;
+static size_t g_decode_buffer_size;
 
 static uint8_t ai_inference_rgb565_luma(const uint8_t *pixel)
 {
@@ -53,90 +66,82 @@ static uint8_t ai_inference_normalize_extent(uint16_t value, uint16_t limit)
     return (uint8_t)((value * 255U) / limit);
 }
 
-static bool ai_inference_detect_blob(const uint8_t *rgb565,
+/*
+ * Presence-oriented detector: frame-to-frame motion. A person entering the
+ * view changes many pixels; a static scene changes almost none. Confidence
+ * scales with the fraction of pixels whose luma changed since the previous
+ * frame, so waving/walking in front reads high and an empty room reads ~0.
+ * This is what makes the sensor react like a real occupancy detector (the
+ * old bright-blob heuristic never fired on a person against a plain wall).
+ */
+#define AIOT_MOTION_MAX_PIXELS (AIOT_INFERENCE_INPUT_WIDTH * AIOT_INFERENCE_INPUT_HEIGHT)
+
+static bool ai_inference_detect_motion(ai_inference_t *inference,
+    const uint8_t *rgb565,
     uint16_t width,
     uint16_t height,
     aiot_ai_result_t *result)
 {
-    if (rgb565 == NULL || result == NULL || width == 0U || height == 0U) {
+    if (inference == NULL || rgb565 == NULL || result == NULL || width == 0U || height == 0U) {
         return false;
     }
+    /* Sample the decoded frame onto a fixed motion grid so the reference buffer
+     * stays small and the detector is independent of the decode resolution. */
+    const uint16_t gw = AIOT_INFERENCE_INPUT_WIDTH;
+    const uint16_t gh = AIOT_INFERENCE_INPUT_HEIGHT;
+    const uint32_t n = (uint32_t)gw * gh;
 
-    uint32_t total_luma = 0U;
-    uint8_t max_luma = 0U;
-    uint32_t pixel_count = (uint32_t)width * height;
+    /* Per-instance reference frame — see the note in ai_inference_t. */
+    uint8_t *prev = inference->prev_luma;
+    bool have_prev = (inference->prev_luma_count == n);
+    uint32_t changed = 0U;
+    uint16_t min_x = gw, min_y = gh, max_x = 0U, max_y = 0U;
 
-    for (uint32_t i = 0; i < pixel_count; ++i) {
-        uint8_t luma = ai_inference_rgb565_luma(rgb565 + (i * 2U));
-        total_luma += luma;
-        if (luma > max_luma) {
-            max_luma = luma;
+    for (uint16_t gy = 0; gy < gh; ++gy) {
+        uint16_t sy = (uint16_t)((uint32_t)gy * height / gh);
+        for (uint16_t gx = 0; gx < gw; ++gx) {
+            uint16_t sx = (uint16_t)((uint32_t)gx * width / gw);
+            uint32_t si = (uint32_t)sy * width + sx;
+            uint8_t luma = ai_inference_rgb565_luma(rgb565 + (si * 2U));
+            uint32_t gi = (uint32_t)gy * gw + gx;
+            if (have_prev) {
+                int diff = (int)luma - (int)prev[gi];
+                if (diff < 0) {
+                    diff = -diff;
+                }
+                if (diff >= 18) {       /* per-pixel change above sensor noise */
+                    changed++;
+                    if (gx < min_x) min_x = gx;
+                    if (gx > max_x) max_x = gx;
+                    if (gy < min_y) min_y = gy;
+                    if (gy > max_y) max_y = gy;
+                }
+            }
+            prev[gi] = luma;
         }
     }
+    inference->prev_luma_count = n;
 
-    uint8_t mean_luma = (uint8_t)(total_luma / pixel_count);
-    uint8_t threshold = (uint8_t)(mean_luma + 24U);
-    if (threshold < mean_luma || threshold > max_luma) {
-        threshold = max_luma;
+    if (!have_prev) {
+        return false;               /* first frame only seeds the reference */
     }
 
-    uint16_t min_x = width;
-    uint16_t min_y = height;
-    uint16_t max_x = 0U;
-    uint16_t max_y = 0U;
-    uint32_t active_pixels = 0U;
-    uint32_t active_luma = 0U;
-
-    for (uint16_t y = 0; y < height; ++y) {
-        for (uint16_t x = 0; x < width; ++x) {
-            uint32_t index = ((uint32_t)y * width + x) * 2U;
-            uint8_t luma = ai_inference_rgb565_luma(rgb565 + index);
-            if (luma < threshold) {
-                continue;
-            }
-
-            if (x < min_x) {
-                min_x = x;
-            }
-            if (y < min_y) {
-                min_y = y;
-            }
-            if (x > max_x) {
-                max_x = x;
-            }
-            if (y > max_y) {
-                max_y = y;
-            }
-
-            active_pixels++;
-            active_luma += luma;
-        }
-    }
-
-    if (active_pixels < (pixel_count / 25U) || min_x >= width || min_y >= height) {
-        return false;
-    }
-
-    uint16_t box_width = (uint16_t)(max_x - min_x + 1U);
-    uint16_t box_height = (uint16_t)(max_y - min_y + 1U);
-    if (box_width < 3U || box_height < 3U) {
-        return false;
-    }
-
-    uint8_t contrast = (uint8_t)((active_luma / active_pixels) - mean_luma);
-    uint32_t occupancy = (active_pixels * 255U) / pixel_count;
-    uint16_t confidence = (uint16_t)contrast * 3U + (uint16_t)occupancy;
+    /* ~12.75% of pixels changing saturates confidence at 255. */
+    uint32_t confidence = (changed * 2000U) / n;
     if (confidence > 255U) {
         confidence = 255U;
+    }
+    if (confidence < 8U) {          /* essentially static: no presence signal */
+        return false;
     }
 
     result->detection_count = 1U;
     result->detections[0].class_id = AIOT_AI_CLASS_GENERIC_OBJECT;
     result->detections[0].confidence = (uint8_t)confidence;
-    result->detections[0].x = ai_inference_normalize_coord(min_x, width);
-    result->detections[0].y = ai_inference_normalize_coord(min_y, height);
-    result->detections[0].width = ai_inference_normalize_extent(box_width, width);
-    result->detections[0].height = ai_inference_normalize_extent(box_height, height);
+    result->detections[0].x = ai_inference_normalize_coord(min_x, gw);
+    result->detections[0].y = ai_inference_normalize_coord(min_y, gh);
+    result->detections[0].width = ai_inference_normalize_extent((uint16_t)(max_x - min_x + 1U), gw);
+    result->detections[0].height = ai_inference_normalize_extent((uint16_t)(max_y - min_y + 1U), gh);
     return true;
 }
 
@@ -151,7 +156,7 @@ static bool ai_inference_decode_jpeg(const uint8_t *jpeg,
         return false;
     }
 
-    if (jpeg == NULL || jpeg[0] != 0xFF || jpeg[1] != 0xD8) {
+    if (g_decode_buffer == NULL || jpeg == NULL || jpeg[0] != 0xFF || jpeg[1] != 0xD8) {
         ESP_LOGE(TAG, "Invalid JPEG SOI marker: len=%u first bytes=0x%02x 0x%02x",
                  (unsigned)jpeg_len,
                  (unsigned)(jpeg ? jpeg[0] : 0U),
@@ -177,9 +182,9 @@ static bool ai_inference_decode_jpeg(const uint8_t *jpeg,
         .indata = (uint8_t *)jpeg,
         .indata_size = jpeg_len,
         .outbuf = g_decode_buffer,
-        .outbuf_size = sizeof(g_decode_buffer),
+        .outbuf_size = g_decode_buffer_size,
         .out_format = JPEG_IMAGE_FORMAT_RGB565,
-        .out_scale = JPEG_IMAGE_SCALE_1_8,
+        .out_scale = JPEG_IMAGE_SCALE_0,
     };
 
     esp_err_t err = esp_jpeg_decode(&decode_cfg, decode_info);
@@ -210,7 +215,7 @@ static bool ai_inference_run_heuristic(ai_inference_t *inference,
     }
 
     inference->inference_count++;
-    return ai_inference_detect_blob(g_decode_buffer, decode_info.width, decode_info.height, result);
+    return ai_inference_detect_motion(inference, g_decode_buffer, decode_info.width, decode_info.height, result);
 }
 
 static bool ai_inference_run_tflm(ai_inference_t *inference,
@@ -257,6 +262,21 @@ void ai_inference_init(ai_inference_t *inference)
 {
     if (inference == NULL) {
         return;
+    }
+
+    /* Allocate the shared decode buffer once, preferring PSRAM. */
+    if (g_decode_buffer == NULL) {
+        g_decode_buffer_size = AIOT_DECODE_RGB565_BYTES;
+        g_decode_buffer = heap_caps_malloc(g_decode_buffer_size,
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (g_decode_buffer == NULL) {
+            g_decode_buffer = heap_caps_malloc(g_decode_buffer_size, MALLOC_CAP_8BIT);
+        }
+        if (g_decode_buffer == NULL) {
+            g_decode_buffer_size = 0;
+            ESP_LOGE(TAG, "decode buffer alloc failed (%u bytes)",
+                (unsigned)AIOT_DECODE_RGB565_BYTES);
+        }
     }
 
     memset(inference, 0, sizeof(*inference));

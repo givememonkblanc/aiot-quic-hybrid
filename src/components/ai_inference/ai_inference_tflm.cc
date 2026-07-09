@@ -60,7 +60,10 @@ static bool configure_resolver(TflmContext *ctx)
         add_resolver_op(ctx->resolver.AddMinimum(), "MINIMUM") &&
         add_resolver_op(ctx->resolver.AddRelu(), "RELU") &&
         add_resolver_op(ctx->resolver.AddAveragePool2D(), "AVERAGE_POOL_2D") &&
+        add_resolver_op(ctx->resolver.AddConv2D(), "CONV_2D") &&
         add_resolver_op(ctx->resolver.AddDepthwiseConv2D(), "DEPTHWISE_CONV_2D") &&
+        add_resolver_op(ctx->resolver.AddReshape(), "RESHAPE") &&
+        add_resolver_op(ctx->resolver.AddSoftmax(), "SOFTMAX") &&
         add_resolver_op(ctx->resolver.AddSub(), "SUB") &&
         add_resolver_op(ctx->resolver.AddConcatenation(), "CONCATENATION");
 }
@@ -231,16 +234,27 @@ static bool fill_input_tensor(TfLiteTensor *input,
                     input->data.uint8[index + static_cast<size_t>(c)] = luma;
                 }
             } else if (input->type == kTfLiteInt8) {
+                /* Affine-quantize the [0,1]-normalized luma to the tensor's own
+                 * scale/zero_point: q = round((luma/255)/scale) + zero_point.
+                 * For the person model (scale=1/255, zp=-128) this reduces to
+                 * luma-128, matching the reference example's `pixel ^ 0x80`. */
                 int32_t zero_point = input->params.zero_point;
-                int32_t centered = static_cast<int32_t>(luma) - 128 + zero_point;
-                if (centered < -128) {
-                    centered = -128;
+                float scale = input->params.scale;
+                int32_t quantized;
+                if (scale > 0.0f) {
+                    float real = static_cast<float>(luma) / 255.0f;
+                    quantized = static_cast<int32_t>((real / scale) + 0.5f) + zero_point;
+                } else {
+                    quantized = static_cast<int32_t>(luma) - 128;
                 }
-                if (centered > 127) {
-                    centered = 127;
+                if (quantized < -128) {
+                    quantized = -128;
+                }
+                if (quantized > 127) {
+                    quantized = 127;
                 }
                 for (int c = 0; c < channels; ++c) {
-                    input->data.int8[index + static_cast<size_t>(c)] = static_cast<int8_t>(centered);
+                    input->data.int8[index + static_cast<size_t>(c)] = static_cast<int8_t>(quantized);
                 }
             } else if (input->type == kTfLiteFloat32) {
                 float normalized = static_cast<float>(luma) / 255.0f;
@@ -509,6 +523,46 @@ static bool populate_generic_detection(const TfLiteTensor *output,
     return true;
 }
 
+/* Softmax classifier: emit a single detection when the score at
+ * target_class_index (e.g. person) clears the threshold. */
+static bool populate_classification_detection(const TfLiteTensor *output,
+    const ai_inference_model_asset_t *model_asset,
+    aiot_ai_result_t *result)
+{
+    int element_count = 1;
+    int idx;
+    uint8_t threshold;
+    uint8_t confidence;
+
+    if (output == NULL || output->dims == NULL || result == NULL || model_asset == NULL) {
+        return false;
+    }
+
+    for (int i = 0; i < output->dims->size; ++i) {
+        element_count *= output->dims->data[i];
+    }
+    idx = static_cast<int>(model_asset->target_class_index);
+    if (element_count <= 0 || idx < 0 || idx >= element_count) {
+        return false;
+    }
+
+    threshold = model_asset->detection_threshold == 0U ? 128U : model_asset->detection_threshold;
+    confidence = score_to_confidence(tensor_value_as_score(output, idx));
+    if (confidence < threshold) {
+        result->detection_count = 0U;
+        return true;
+    }
+
+    result->detection_count = 1U;
+    result->detections[0].class_id = model_asset->target_class_index;
+    result->detections[0].confidence = confidence;
+    result->detections[0].x = 32U;
+    result->detections[0].y = 32U;
+    result->detections[0].width = 192U;
+    result->detections[0].height = 192U;
+    return true;
+}
+
 }
 #endif
 
@@ -554,6 +608,8 @@ extern "C" bool ai_inference_tflm_run(const ai_inference_model_asset_t *model,
 
     if (model->output_type == AI_INFERENCE_OUTPUT_FOMO) {
         parsed = populate_fomo_detections(output, model, result);
+    } else if (model->output_type == AI_INFERENCE_OUTPUT_CLASSIFICATION) {
+        parsed = populate_classification_detection(output, model, result);
     } else {
         parsed = populate_generic_detection(output, model, result);
     }
