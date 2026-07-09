@@ -1,0 +1,43 @@
+{
+  "log": "/home/ryzen395/aiot_quic_baseline/experiments/runs_v2/sweep_hybrid_rtt300_r5/dgram_recv.csv",
+  "total_rows": 109,
+  "invalid_rows": 0,
+  "connections": {
+    "913915ebe5503127": {
+      "telemetry": {
+        "received": 55,
+        "unique": 55,
+        "seq_min": 0,
+        "seq_max": 54,
+        "lost_gap": 0,
+        "loss_pct": 0.0,
+        "duplicates": 0,
+        "reordered": 0,
+        "payload_bytes": 880,
+        "owdv_ms_avg": 9.947,
+        "owdv_ms_p50": 1.025,
+        "owdv_ms_p95": 89.86,
+        "owdv_ms_p99": 107.986,
+        "interarrival_ms_avg": 677.626,
+        "interarrival_ms_p95": 778.802
+      },
+      "ai_result": {
+        "received": 54,
+        "unique": 54,
+        "seq_min": 0,
+        "seq_max": 53,
+        "lost_gap": 0,
+        "loss_pct": 0.0,
+        "duplicates": 0,
+        "reordered": 0,
+        "payload_bytes": 1080,
+        "owdv_ms_avg": 13.572,
+        "owdv_ms_p50": 10.135,
+        "owdv_ms_p95": 50.435,
+        "owdv_ms_p99": 98.0,
+        "interarrival_ms_avg": 677.771,
+        "interarrival_ms_p95": 842.566
+      }
+    }
+  }
+}

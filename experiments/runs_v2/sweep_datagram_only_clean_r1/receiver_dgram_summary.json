@@ -1,6 +1,6 @@
 {
   "log": "/home/ryzen395/aiot_quic_baseline/experiments/runs_v2/sweep_datagram_only_clean_r1/dgram_recv.csv",
-  "total_rows": 142,
+  "total_rows": 254,
   "invalid_rows": 0,
   "connections": {
     "b91b5e10f865a021": {
@@ -37,6 +37,42 @@
         "owdv_ms_p99": 119.629,
         "interarrival_ms_avg": 528.675,
         "interarrival_ms_p95": 729.923
+      }
+    },
+    "f70381729eb66817": {
+      "telemetry": {
+        "received": 56,
+        "unique": 56,
+        "seq_min": 0,
+        "seq_max": 55,
+        "lost_gap": 0,
+        "loss_pct": 0.0,
+        "duplicates": 0,
+        "reordered": 0,
+        "payload_bytes": 896,
+        "owdv_ms_avg": 17.645,
+        "owdv_ms_p50": 3.634,
+        "owdv_ms_p95": 91.78,
+        "owdv_ms_p99": 110.105,
+        "interarrival_ms_avg": 680.535,
+        "interarrival_ms_p95": 859.121
+      },
+      "ai_result": {
+        "received": 56,
+        "unique": 56,
+        "seq_min": 0,
+        "seq_max": 55,
+        "lost_gap": 0,
+        "loss_pct": 0.0,
+        "duplicates": 0,
+        "reordered": 0,
+        "payload_bytes": 1120,
+        "owdv_ms_avg": 33.114,
+        "owdv_ms_p50": 6.605,
+        "owdv_ms_p95": 111.913,
+        "owdv_ms_p99": 121.071,
+        "interarrival_ms_avg": 676.01,
+        "interarrival_ms_p95": 817.682
       }
     }
   }
