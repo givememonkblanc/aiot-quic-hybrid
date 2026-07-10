@@ -88,9 +88,18 @@ benefit. (R2: "QUIC intrinsically avoids HoL" — the baseline demonstrates it.)
    `MQTT_Publish`** instead of `send_hybrid`/datagrams (telemetry, AI result,
    image chunks as PUBLISH on their topics). This is more than a transport swap
    because the QUIC data plane bypasses coreMQTT.
-3. Host: mosquitto config (TLS) + logging subscriber emitting the QUIC CSV schema. *(host, ~½ day)*
-4. Sweep harness `backend` axis + point device to the right receiver. *(script)*
-5. `analyze_sweep.py`: add backend to the comparison; produce TCP-vs-QUIC table.
+3. ✅ *(built + smoke-verified)* Host: `experiments/tcp_bench/` — mosquitto TLS
+   broker (self-signed cert, `run.sh` generates it) + `subscriber.py` that parses
+   the aiot_object_header and writes the **exact `dgram_recv.csv` schema**, so
+   `parse_receiver_dgram_log.py` computes delivery/loss/OWDV identically. Verified
+   end-to-end without the device (publish framed objects → parser summary).
+4. Sweep harness `backend` axis + point device to the broker (`APP_TCP_BROKER_HOST`)
+   vs picoquic. *(script — remaining)*
+5. `analyze_sweep.py`: add backend to the comparison; produce TCP-vs-QUIC table. *(remaining)*
+
+Remaining to get numbers: flash TCP-backend firmware (creds + broker host baked),
+run device against the broker under the netem sweep, confirm esp-tls non-block on
+target, then compare.
 
 ## Fairness caveats to state in the paper
 

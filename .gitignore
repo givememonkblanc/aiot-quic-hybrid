@@ -46,3 +46,9 @@ host_receiver/aiot_feed.jsonl
 host_receiver/latest.jpg
 host_receiver/mqtt_events.csv
 host_receiver/*_dgram*.csv
+
+# TCP baseline broker artifacts (never commit certs/keys/generated conf/data)
+experiments/tcp_bench/certs/
+experiments/tcp_bench/mosquitto.conf
+experiments/tcp_bench/*.csv
+experiments/tcp_bench/*summary*.json
