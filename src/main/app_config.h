@@ -26,6 +26,15 @@
 #define APP_TCP_USE_TLS     true
 #define APP_TCP_TOPIC_AI    "aiot/bench/ai"
 #define APP_TCP_TOPIC_IMG   "aiot/bench/img"
+
+/* Store-and-forward: buffer detection events locally while the link is down
+ * (drone/intermittent coverage) and replay them with their original gen_ts on
+ * reconnect. Off by default (keeps sweep behaviour unchanged); enable for the
+ * drone deployment. See src/components/store_forward/. */
+#ifndef APP_STORE_FORWARD_ENABLE
+#define APP_STORE_FORWARD_ENABLE 0
+#endif
+#define APP_STORE_FORWARD_DRAIN_PER_LOOP 4  /* buffered objects flushed per loop */
 #define APP_WIFI_TIMEOUT_MS 15000
 #define APP_DEVICE_ID "esp32s3"
 

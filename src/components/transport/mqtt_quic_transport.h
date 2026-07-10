@@ -105,6 +105,17 @@ int mqtt_quic_transport_send_hybrid(NetworkContext_t *ctx,
                                     uint8_t priority,
                                     uint32_t deadline_ms);
 
+/* Like send_hybrid but replays a store-and-forward object with its ORIGINAL
+ * gen_ts_ms (pass 0 to stamp now — same as send_hybrid). */
+int mqtt_quic_transport_send_hybrid_ts(NetworkContext_t *ctx,
+                                       delivery_mode_t mode,
+                                       const uint8_t *payload,
+                                       size_t payload_len,
+                                       uint8_t track_id,
+                                       uint8_t priority,
+                                       uint32_t deadline_ms,
+                                       uint32_t gen_ts_ms);
+
 // TransportInterface declaration
 extern TransportInterface_t xTransportInterface;
 

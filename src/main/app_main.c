@@ -20,6 +20,7 @@ static inline void vTaskDelay(uint32_t ticks)
 #include "../components/dl_qads/include/dl_qads.h"
 #include "../components/sources/include/source_manager.h"
 #include "../components/wifi_link/include/wifi_link.h"
+#include "../components/store_forward/include/store_forward.h"
 
 #include "core_mqtt.h"
 #include "core_mqtt_serializer.h"
@@ -46,6 +47,9 @@ static const char *TAG = "APP-MAIN";
 
 static dl_qads_t g_scheduler;
 static source_manager_t g_source_manager;
+#if APP_STORE_FORWARD_ENABLE
+static store_forward_t g_sf;   /* offline buffer for the drone/intermittent case */
+#endif
 
 #if APP_PRODUCT_MODE
 static app_cfg_t g_cfg;
@@ -626,6 +630,9 @@ static void app_experiment_main(void)
     }
 
     source_manager_init(&g_source_manager);
+#if APP_STORE_FORWARD_ENABLE
+    store_forward_init(&g_sf);
+#endif
     printf("[APP]Camera initialized\n");
     fflush(stdout);
     ESP_LOGI("DEBUG", "EXP-E1: Camera Initialized. Checking heap...");
@@ -761,6 +768,22 @@ static void app_experiment_main(void)
                         tinyml_mode = DELIVERY_UNRELIABLE;
 #endif
 
+#if APP_STORE_FORWARD_ENABLE
+                        if (!quic_client_is_connected()) {
+                            /* Link down (coverage gap): buffer with current gen_ts. */
+                            store_forward_push(&g_sf, AIOT_TRACK_AI_RESULT, packet.priority,
+                                (uint32_t)(esp_timer_get_time() / 1000), 0U,
+                                tmp, (uint16_t)datagram_len);
+                        } else {
+                            /* Link up: flush buffered detections (original gen_ts) first. */
+                            sf_object_t bo;
+                            for (int d = 0; d < APP_STORE_FORWARD_DRAIN_PER_LOOP &&
+                                            store_forward_pop(&g_sf, &bo); ++d) {
+                                mqtt_quic_transport_send_hybrid_ts(&g_networkContext,
+                                    DELIVERY_UNRELIABLE, bo.data, bo.len, bo.track,
+                                    bo.priority, APP_DEADLINE_CLASS1_MS, bo.gen_ts_ms);
+                            }
+#endif
                         for (uint32_t burst = 0; burst < burst_count; ++burst) {
                             mqtt_quic_transport_send_hybrid(&g_networkContext,
                                                             tinyml_mode,
@@ -772,6 +795,9 @@ static void app_experiment_main(void)
                                 vTaskDelay(pdMS_TO_TICKS(APP_STRESS_INTER_BURST_DELAY_MS));
                             }
                         }
+#if APP_STORE_FORWARD_ENABLE
+                        }
+#endif
                         metrics.inference_to_enqueue_us = (uint32_t)(esp_timer_get_time() - inference_done_us);
                     }
                     app_log_decision(&packet, &metrics,

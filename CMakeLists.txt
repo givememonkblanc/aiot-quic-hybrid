@@ -15,6 +15,7 @@ set(COMPONENT_DIRS
     src/components/provisioning
     src/components/ota
     src/components/status_led
+    src/components/store_forward
     # Vendored third-party (QUIC/TLS stack + camera) — see src/third_party/README.md
     src/third_party/esp_camera
     src/third_party/esp-http3

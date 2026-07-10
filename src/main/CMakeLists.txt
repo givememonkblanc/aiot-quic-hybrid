@@ -2,7 +2,7 @@ idf_component_register(
     SRCS "app_main.c" "app_tcp_baseline.c"
     INCLUDE_DIRS "."
     REQUIRES common dl_qads transport sources wifi_link esp_camera
-            app_cfg presence provisioning ota status_led
+            app_cfg presence provisioning ota status_led store_forward
             esp_https_ota app_update esp_wifi nvs_flash driver
 )
 

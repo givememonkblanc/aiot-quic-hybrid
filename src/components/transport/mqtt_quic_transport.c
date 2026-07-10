@@ -203,13 +203,37 @@ static bool route_queue_evict_stale_head(NetworkContext_t *ctx)
     return true;
 }
 
-int mqtt_quic_transport_send_hybrid(NetworkContext_t *ctx,
+static int send_hybrid_impl(NetworkContext_t *ctx, delivery_mode_t mode,
+    const uint8_t *payload, size_t payload_len, uint8_t track_id,
+    uint8_t priority, uint32_t deadline_ms, uint32_t gen_ts_ms);
+
+int mqtt_quic_transport_send_hybrid(NetworkContext_t *ctx, delivery_mode_t mode,
+    const uint8_t *payload, size_t payload_len, uint8_t track_id,
+    uint8_t priority, uint32_t deadline_ms)
+{
+    /* Live send: gen_ts is stamped at enqueue time. */
+    return send_hybrid_impl(ctx, mode, payload, payload_len, track_id, priority,
+                            deadline_ms, 0U);
+}
+
+/* Store-and-forward replay: keep the ORIGINAL gen_ts so the receiver sees the
+ * true age of a buffered detection (honest Age-of-Information). */
+int mqtt_quic_transport_send_hybrid_ts(NetworkContext_t *ctx, delivery_mode_t mode,
+    const uint8_t *payload, size_t payload_len, uint8_t track_id,
+    uint8_t priority, uint32_t deadline_ms, uint32_t gen_ts_ms)
+{
+    return send_hybrid_impl(ctx, mode, payload, payload_len, track_id, priority,
+                            deadline_ms, gen_ts_ms);
+}
+
+static int send_hybrid_impl(NetworkContext_t *ctx,
                                      delivery_mode_t mode,
                                      const uint8_t *payload,
                                      size_t payload_len,
                                      uint8_t track_id,
                                      uint8_t priority,
-                                     uint32_t deadline_ms)
+                                     uint32_t deadline_ms,
+                                     uint32_t gen_ts_ms)
 {
     if (ctx == NULL || ctx->route_queue == NULL || payload == NULL || payload_len == 0) {
         return -1;
@@ -243,7 +267,7 @@ int mqtt_quic_transport_send_hybrid(NetworkContext_t *ctx,
         hdr->priority = priority;
         hdr->flags = (deadline_ms != 0U) ? AIOT_OBJ_FLAG_EXPIRY_DROP_ALLOWED : 0U;
         hdr->object_seq = object_seq;
-        hdr->gen_ts_ms = (uint32_t)(now_us / 1000);
+        hdr->gen_ts_ms = (gen_ts_ms != 0U) ? gen_ts_ms : (uint32_t)(now_us / 1000);
     }
     ESP_LOGD(TAG, "[DATAGRAM_LIFECYCLE] Producer malloc: payload=%p, len=%zu (safe_len=%zu)",
              heap_payload, header_len + payload_len, safe_len);
