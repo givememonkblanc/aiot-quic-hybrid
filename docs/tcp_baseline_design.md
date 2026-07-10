@@ -59,6 +59,21 @@ Expected finding: **under loss the TCP baseline's freshness and delivery degrade
 (HoL + retransmission) while QUIC-hybrid holds freshness**, isolating QUIC's
 benefit. (R2: "QUIC intrinsically avoids HoL" — the baseline demonstrates it.)
 
+### Measured (on-target, netem bidir; `out/tcp_baseline_results.txt`)
+
+| TCP-MQTT | recv | app-loss % | OWDV p95 (AoI proxy) |
+|----------|------|-----------|----------------------|
+| clean  | 283 | 0.0 | ai −42 / img 38 ms |
+| loss2  | 233 | 0.0 | ai **1455** / img **2348** ms |
+| loss10 | 141 | 0.0 | ai **2107** / img **3704** ms |
+
+TCP retransmits everything (0 % app loss) but a lost segment stalls the ordered
+stream, so freshness/AoI **collapses to ~1.5–3.7 s** under loss. QUIC-hybrid at
+loss10 sheds ~9.9 % of datagrams yet holds AoI at **~100 ms** — **≈35× fresher**.
+The reliable-ordered (TCP) vs loss-tolerant-fresh (QUIC datagram) tradeoff,
+measured on ESP32-S3. Testbed caveat: TLS was encryption-only (no broker auth);
+crypto cost is identical so the performance comparison is fair.
+
 ## Host side
 
 - **Broker**: mosquitto (TCP+TLS) on the host, replacing picoquic for TCP runs.

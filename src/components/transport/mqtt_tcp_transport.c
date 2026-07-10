@@ -14,8 +14,12 @@
 #include <fcntl.h>
 #include <string.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "esp_tls.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 static const char *TAG = "MQTT_TCP";
 
@@ -101,6 +105,10 @@ int32_t mqtt_tcp_transport_send(NetworkContext_t *ctx, const void *buf, size_t l
     }
     size_t written = 0;
     const uint8_t *p = (const uint8_t *)buf;
+    /* Blocking send with a cap: yield (don't busy-spin) while the TCP send
+     * buffer is full so the measurement reflects real TCP back-pressure/HoL, not
+     * a spin loop. Give up after 10 s so a stalled link can't hang the task. */
+    int64_t deadline = esp_timer_get_time() + 10LL * 1000 * 1000;
     while (written < len) {
         ssize_t n = esp_tls_conn_write((esp_tls_t *)ctx->tls, p + written, len - written);
         if (n > 0) {
@@ -108,7 +116,13 @@ int32_t mqtt_tcp_transport_send(NetworkContext_t *ctx, const void *buf, size_t l
             continue;
         }
         if (n == ESP_TLS_ERR_SSL_WANT_WRITE || n == ESP_TLS_ERR_SSL_WANT_READ) {
-            continue;  /* retry — coreMQTT sends are expected to complete */
+            if (esp_timer_get_time() > deadline) {
+                ESP_LOGW(TAG, "send stalled (%u/%u bytes) — dropping", (unsigned)written, (unsigned)len);
+                ctx->stream_send_fail++;
+                return -1;
+            }
+            vTaskDelay(pdMS_TO_TICKS(2));  /* yield to the network stack */
+            continue;
         }
         ESP_LOGE(TAG, "write failed n=%d", (int)n);
         ctx->stream_send_fail++;

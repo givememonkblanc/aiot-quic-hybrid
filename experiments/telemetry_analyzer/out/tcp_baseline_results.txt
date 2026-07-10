@@ -1,0 +1,19 @@
+# TCP-MQTT baseline vs QUIC-hybrid — "why QUIC" (on-target, netem bidir)
+# Fair blocking send (yields, 10s cap). OWDV p95 = one-way delay variation (AoI proxy, ms).
+
+TCP-MQTT (all objects over one TCP+TLS MQTT connection):
+  cond     recv   app-loss%   OWDV_p95(ai)   OWDV_p95(img)
+  clean    283    0.0         -42            38
+  loss2    233    0.0         1455           2348
+  loss10   141    0.0         2107           3704
+
+QUIC-hybrid (from 5-rep sweep, out/paper_sweep_multirep.txt):
+  loss10:  rx gap-loss 9.9%,  OWDV_p95 ~100 ms
+
+=> Head-of-line blocking: TCP retransmits everything (0% app loss) but a lost
+   segment stalls the ordered stream, so freshness/AoI collapses to ~1.5-3.7 s
+   under loss. QUIC-hybrid sheds old datagrams (accepts ~10% loss) and holds AoI
+   at ~100 ms — ~35x fresher at loss10. This is the reliable-ordered (TCP) vs
+   loss-tolerant-fresh (QUIC datagram) tradeoff, measured on ESP32-S3.
+   Caveat: TLS insecure (encryption only, no broker auth) on the testbed —
+   crypto cost identical, so performance-fair.
