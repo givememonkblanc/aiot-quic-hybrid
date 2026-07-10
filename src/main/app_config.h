@@ -12,6 +12,20 @@
 #define APP_WIFI_PASSWORD "REPLACE_ME"
 #define APP_PEER_HOST "REPLACE_ME"
 #define APP_MQTT_PORT 14567
+
+/* Transport backend: QUIC hybrid (default) vs the TCP-MQTT "why QUIC" baseline
+ * (docs/tcp_baseline_design.md). TCP publishes every object over one TCP+TLS
+ * MQTT connection to a broker. */
+#define APP_TRANSPORT_BACKEND_QUIC 0
+#define APP_TRANSPORT_BACKEND_TCP  1
+#ifndef APP_TRANSPORT_BACKEND
+#define APP_TRANSPORT_BACKEND APP_TRANSPORT_BACKEND_QUIC
+#endif
+#define APP_TCP_BROKER_HOST APP_PEER_HOST
+#define APP_TCP_BROKER_PORT 8883
+#define APP_TCP_USE_TLS     true
+#define APP_TCP_TOPIC_AI    "aiot/bench/ai"
+#define APP_TCP_TOPIC_IMG   "aiot/bench/img"
 #define APP_WIFI_TIMEOUT_MS 15000
 #define APP_DEVICE_ID "esp32s3"
 

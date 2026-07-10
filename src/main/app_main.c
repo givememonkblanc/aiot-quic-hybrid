@@ -1298,9 +1298,15 @@ static void app_product_main(void)
 }
 #endif /* APP_PRODUCT_MODE */
 
+#if APP_TRANSPORT_BACKEND == APP_TRANSPORT_BACKEND_TCP
+extern void app_tcp_baseline_main(void);   /* src/main/app_tcp_baseline.c */
+#endif
+
 void app_main(void)
 {
-#if APP_PRODUCT_MODE
+#if APP_TRANSPORT_BACKEND == APP_TRANSPORT_BACKEND_TCP
+    app_tcp_baseline_main();   /* non-QUIC baseline */
+#elif APP_PRODUCT_MODE
     app_product_main();
 #else
     app_experiment_main();
