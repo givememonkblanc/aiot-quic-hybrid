@@ -216,8 +216,36 @@ static esp_err_t ev_loop_init(ev_loop *loop) {
     return ESP_OK;
 }
 
-// Initialize default event loop
+// Drop watchers left behind by a previous connection without touching the
+// loop's own resources.
+static void ev_loop_clear_watchers(ev_loop *loop) {
+    if (!loop->io_mutex) {
+        return;
+    }
+
+    xSemaphoreTake(loop->io_mutex, portMAX_DELAY);
+    for (int i = 0; i < MAX_IO_WATCHERS; i++) {
+        if (loop->io_watchers[i]) {
+            loop->io_watchers[i]->active = 0;
+            loop->io_watchers[i] = NULL;
+        }
+    }
+    loop->io_count = 0;
+    xSemaphoreGive(loop->io_mutex);
+}
+
+// Initialize default event loop.
+//
+// The default loop is a process-wide singleton, so this is idempotent: a
+// session re-establish must not stack a second esp_event_loop (queue + 8 KB
+// task) on top of the live one. Doing so orphaned the previous loop on every
+// retry until esp_event_loop_create() ran out of resources and every
+// subsequent reconnect failed here instead of at the network.
 esp_err_t ev_default_loop_init(void) {
+    if (EV_DEFAULT->esp_event_loop != NULL) {
+        ev_loop_clear_watchers(EV_DEFAULT);
+        return ESP_OK;
+    }
     return ev_loop_init(EV_DEFAULT);
 }
 
@@ -234,9 +262,12 @@ void ev_io_init(ev_io *watcher, void (*cb)(ev_loop *loop, ev_io *w, int revents)
 // Start an IO watcher
 esp_err_t ev_io_start(ev_loop *loop, ev_io *watcher) {
     if (!loop) loop = EV_DEFAULT;
-    
+    if (!watcher || !loop->io_mutex) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     ESP_LOGI(TAG, "Starting IO watcher for fd %d", watcher->fd);
-    
+
     xSemaphoreTake(loop->io_mutex, portMAX_DELAY);
     
     // Find an empty slot
@@ -283,7 +314,10 @@ esp_err_t ev_io_start(ev_loop *loop, ev_io *watcher) {
 // Stop an IO watcher
 void ev_io_stop(ev_loop *loop, ev_io *watcher) {
     if (!loop) loop = EV_DEFAULT;
-    
+    if (!watcher || !loop->io_mutex) {
+        return;
+    }
+
     xSemaphoreTake(loop->io_mutex, portMAX_DELAY);
     
     for (int i = 0; i < MAX_IO_WATCHERS; i++) {
@@ -313,14 +347,40 @@ void ev_timer_init(ev_timer *watcher, void (*cb)(ev_loop *loop, ev_timer *w, int
         .arg = watcher,
         .name = "ev_timer"
     };
-    
-    ESP_ERROR_CHECK(esp_timer_create(&timer_args, &watcher->esp_timer_handle));
+
+    esp_err_t ret = esp_timer_create(&timer_args, &watcher->esp_timer_handle);
+    if (ret != ESP_OK) {
+        /* A field device must not panic here: leave the watcher timer-less
+         * (the start/stop paths tolerate a NULL handle) so the caller can
+         * fail the connection attempt and retry. */
+        ESP_LOGE(TAG, "esp_timer_create failed: %s", esp_err_to_name(ret));
+        watcher->esp_timer_handle = NULL;
+    }
+}
+
+// Release a timer watcher's ESP timer. Callers own the watcher storage, so
+// they must call this before discarding one; ev_timer_init() memsets the
+// watcher and would otherwise lose the handle, leaking it per reconnect.
+void ev_timer_destroy(ev_timer *watcher) {
+    if (!watcher || !watcher->esp_timer_handle) {
+        return;
+    }
+
+    if (watcher->active) {
+        esp_timer_stop(watcher->esp_timer_handle);
+        watcher->active = 0;
+    }
+    esp_timer_delete(watcher->esp_timer_handle);
+    watcher->esp_timer_handle = NULL;
 }
 
 // Start/restart a timer
 void ev_timer_again(ev_loop *loop, ev_timer *watcher) {
     if (!loop) loop = EV_DEFAULT;
-    
+    if (!watcher || !watcher->esp_timer_handle) {
+        return;
+    }
+
     watcher->loop = loop;
     
     // Stop timer if already running
@@ -338,7 +398,10 @@ void ev_timer_again(ev_loop *loop, ev_timer *watcher) {
 // Stop a timer
 void ev_timer_stop(ev_loop *loop, ev_timer *watcher) {
     if (!loop) loop = EV_DEFAULT;
-    
+    if (!watcher || !watcher->esp_timer_handle) {
+        return;
+    }
+
     if (watcher->active) {
         esp_timer_stop(watcher->esp_timer_handle);
         watcher->active = 0;
@@ -348,7 +411,10 @@ void ev_timer_stop(ev_loop *loop, ev_timer *watcher) {
 // Break the event loop
 void ev_break(ev_loop *loop, int how) {
     if (!loop) loop = EV_DEFAULT;
-    
+    if (!loop->esp_event_loop) {
+        return;
+    }
+
     // Post break event
     esp_event_post_to(loop->esp_event_loop, LIBEV_EVENTS, LIBEV_BREAK_EVENT,
                      NULL, 0, portMAX_DELAY);

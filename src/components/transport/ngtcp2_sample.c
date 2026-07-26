@@ -35,6 +35,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <assert.h>
+#include <unistd.h>
 
 #include <ngtcp2/ngtcp2.h>
 #include <ngtcp2/ngtcp2_crypto.h>
@@ -879,10 +880,36 @@ static int client_init(struct client *c) {
   return 0;
 }
 
+/* Release everything client_init() acquired. NULL/zero-safe, so it is also
+ * correct for a client that failed part-way through initialization. */
 static void client_free(struct client *c) {
+  if (!c) {
+    return;
+  }
+
+  ev_timer_stop(EV_DEFAULT, &c->timer);
+  ev_timer_destroy(&c->timer);
+  ev_io_stop(EV_DEFAULT, &c->rev);
+
   ngtcp2_conn_del(c->conn);
+  c->conn = NULL;
   SSL_free(c->ssl);
+  c->ssl = NULL;
   SSL_CTX_free(c->ssl_ctx);
+  c->ssl_ctx = NULL;
+
+  /* The UDP socket outlived every previous teardown: each reconnect burned
+   * one lwip fd until the pool was exhausted. */
+  if (c->fd > 0) {
+    close(c->fd);
+  }
+  c->fd = -1;
+}
+
+/* Tear the client down and return it to a pristine state for a re-init. */
+static void client_release(struct client *c) {
+  client_free(c);
+  memset(c, 0, sizeof(*c));
 }
 
 static ssize_t client_write_application_data(struct client *c, const uint8_t *data, size_t datalen) {
@@ -1079,8 +1106,9 @@ int quic_client_init_with_config(const quic_client_config_t *config) {
         ESP_LOGI(TAG, "QUIC mutex created successfully");
     }
     
-    // Clear the global client structure first
-    memset(&g_client, 0, sizeof(g_client));
+    /* Release whatever a previous attempt left behind before reusing the
+     * client; a bare memset here would strand its socket and timer. */
+    client_release(&g_client);
     quic_processing = false;
     g_quic_handshake_start_us = esp_timer_get_time();
     g_quic_handshake_done_us = 0;
@@ -1119,6 +1147,7 @@ int quic_client_init_with_config(const quic_client_config_t *config) {
     if (client_init(&g_client) != 0) {
         log_internal_heap_state("client_init failed");
         ESP_LOGE(TAG, "client_init failed");
+        client_release(&g_client);
         return -1;
     }
 
@@ -1265,10 +1294,12 @@ void quic_client_cleanup(void) {
     
     if (g_client.conn) {
         ESP_LOGI(TAG, "Freeing QUIC connection...");
-        client_free(&g_client);
-        memset(&g_client, 0, sizeof(g_client));  // Clear the structure
     }
-    
+    /* Unconditional: a connection that never reached ngtcp2 still holds a
+     * socket, a TLS context and a timer. */
+    client_release(&g_client);
+
+
     g_quic_connected = false;
     g_quic_handshake_completed = false;
     quic_processing = false;

@@ -43,6 +43,7 @@ void ev_io_stop(ev_loop *loop, ev_io *watcher);
 void ev_timer_init(ev_timer *watcher, void (*cb)(ev_loop *loop, ev_timer *w, int revents), ev_tstamp after, ev_tstamp repeat);
 void ev_timer_again(ev_loop *loop, ev_timer *watcher);
 void ev_timer_stop(ev_loop *loop, ev_timer *watcher);
+void ev_timer_destroy(ev_timer *watcher);
 
 void ev_run(ev_loop *loop, int flags);
 void ev_break(ev_loop *loop, int how);
