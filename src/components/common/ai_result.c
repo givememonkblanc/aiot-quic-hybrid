@@ -35,6 +35,7 @@ void aiot_ai_result_init(aiot_ai_result_t *result, aiot_ai_backend_t backend, ui
 
     result->backend = backend;
     result->detection_count = 0;
+    result->raw_score = 0U;
     result->source_width = 0U;
     result->source_height = 0U;
     result->input_width = 0U;

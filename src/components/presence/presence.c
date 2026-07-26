@@ -41,6 +41,10 @@ uint8_t presence_score(const aiot_ai_result_t *result)
     if (result == NULL) {
         return 0;
     }
+    /* Gate on the pre-threshold model score so this state machine's
+     * enter/exit hysteresis is the real sensitivity knob; the detection
+     * list is additionally gated by the model's own threshold. */
+    score = result->raw_score;
     for (uint8_t i = 0; i < result->detection_count && i < AIOT_AI_RESULT_MAX_DETECTIONS; i++) {
         if (result->detections[i].confidence > score) {
             score = result->detections[i].confidence;

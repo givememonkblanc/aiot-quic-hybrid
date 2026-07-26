@@ -432,11 +432,14 @@ static bool populate_fomo_detections(const TfLiteTensor *output,
                 uint8_t confidence = score_to_confidence(tensor_value_as_score(output, static_cast<int>(flat_index)));
                 uint8_t class_id;
 
-                if (confidence < threshold) {
-                    continue;
-                }
                 if (model_asset->background_index != 0xFFU &&
                     channel == static_cast<int>(model_asset->background_index)) {
+                    continue;
+                }
+                if (confidence > result->raw_score) {
+                    result->raw_score = confidence;
+                }
+                if (confidence < threshold) {
                     continue;
                 }
 
@@ -508,6 +511,7 @@ static bool populate_generic_detection(const TfLiteTensor *output,
 
     uint8_t threshold = model_asset->detection_threshold == 0U ? 128U : model_asset->detection_threshold;
     uint8_t confidence = score_to_confidence(best_score);
+    result->raw_score = confidence;
     if (confidence < threshold) {
         result->detection_count = 0U;
         return true;
@@ -548,6 +552,11 @@ static bool populate_classification_detection(const TfLiteTensor *output,
 
     threshold = model_asset->detection_threshold == 0U ? 128U : model_asset->detection_threshold;
     confidence = score_to_confidence(tensor_value_as_score(output, idx));
+    /* Surface the pre-threshold score: the presence state machine gates on
+     * its own configurable thresholds, and the heartbeat reports it. Only
+     * the detection list (used for scheduler importance) stays gated here. */
+    result->raw_score = confidence;
+    ESP_LOGI(TAG, "person score=%u/255 (det_thr=%u)", (unsigned)confidence, (unsigned)threshold);
     if (confidence < threshold) {
         result->detection_count = 0U;
         return true;

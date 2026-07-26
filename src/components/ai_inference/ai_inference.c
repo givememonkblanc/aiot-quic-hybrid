@@ -136,6 +136,7 @@ static bool ai_inference_detect_motion(ai_inference_t *inference,
     }
 
     result->detection_count = 1U;
+    result->raw_score = (uint8_t)confidence;
     result->detections[0].class_id = AIOT_AI_CLASS_GENERIC_OBJECT;
     result->detections[0].confidence = (uint8_t)confidence;
     result->detections[0].x = ai_inference_normalize_coord(min_x, gw);

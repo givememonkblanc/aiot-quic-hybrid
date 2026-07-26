@@ -261,12 +261,15 @@ void source_manager_init(source_manager_t *manager)
         s->set_awb_gain(s, 1);
         s->set_wb_mode(s, 0);
         s->set_exposure_ctrl(s, 1);
-        s->set_aec2(s, 0);
+        /* Indoor scenes were coming out too dark for the person classifier:
+         * AEC2 (DSP night mode) lets exposure stretch under low light, and a
+         * 16x AGC ceiling (up from 2x) lets gain follow. */
+        s->set_aec2(s, 1);
         s->set_ae_level(s, 0);
         s->set_aec_value(s, 300);
         s->set_gain_ctrl(s, 1);
         s->set_agc_gain(s, 0);
-        s->set_gainceiling(s, (gainceiling_t)0);
+        s->set_gainceiling(s, (gainceiling_t)3);
         s->set_bpc(s, 0);
         s->set_wpc(s, 1);
         s->set_raw_gma(s, 1);

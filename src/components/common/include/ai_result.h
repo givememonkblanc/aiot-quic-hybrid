@@ -40,6 +40,10 @@ typedef struct {
 typedef struct {
     aiot_ai_backend_t backend;
     uint8_t detection_count;
+    /* Best per-frame score before the model's detection threshold, so the
+     * presence state machine can apply its own (configurable) hysteresis
+     * thresholds. In-memory only — not part of the serialized wire format. */
+    uint8_t raw_score;
     uint16_t source_width;
     uint16_t source_height;
     uint16_t input_width;

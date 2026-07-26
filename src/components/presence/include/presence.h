@@ -62,7 +62,8 @@ typedef struct {
 
 void presence_init(presence_t *p, const presence_config_t *config);
 
-/* Highest detection confidence in the result (0 when no detections). */
+/* Best frame score: the model's pre-threshold raw score or the highest
+ * detection confidence, whichever is larger (0 when neither). */
 uint8_t presence_score(const aiot_ai_result_t *result);
 
 /*
