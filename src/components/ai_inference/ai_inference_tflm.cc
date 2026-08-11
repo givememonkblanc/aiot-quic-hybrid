@@ -1,5 +1,6 @@
 #include "ai_inference_tflm.h"
 
+#include <new>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -83,7 +84,10 @@ static void reset_context(void)
     g_tflm.model_asset = NULL;
     g_tflm.tensor_arena_size = 0U;
     g_tflm.model = NULL;
-    g_tflm.resolver = tflite::MicroMutableOpResolver<24>();
+    /* Re-construct in place: copy-assigning a temporary would copy its
+     * uninitialized registration slots (-Werror=uninitialized at -Os). */
+    g_tflm.resolver.~MicroMutableOpResolver();
+    new (&g_tflm.resolver) tflite::MicroMutableOpResolver<24>();
 }
 
 static uint8_t rgb565_luma(const uint8_t *pixel)

@@ -38,6 +38,7 @@ static inline void vTaskDelay(uint32_t ticks)
 #include "provisioning.h"
 #include "ota.h"
 #include "status_led.h"
+#include "display.h"
 #include "esp_wifi.h"
 #include "esp_app_desc.h"
 #include "driver/gpio.h"
@@ -994,7 +995,7 @@ static void app_publish_registration(void)
 /* Snapshot on enter: loss-tolerant JPEG delivered as QUIC datagram chunks. */
 static void app_send_snapshot(const uint8_t *jpeg, size_t len, uint8_t priority)
 {
-    if (!g_cfg.snapshot_on_enter || len == 0) {
+    if (len == 0) {
         return;
     }
     size_t chunks = 0;
@@ -1060,8 +1061,11 @@ static void app_send_ai_result(const aiot_ai_result_t *result,
 }
 #endif
 
+static uint32_t g_hb_count;
+
 static void app_send_heartbeat(int64_t now_us)
 {
+    g_hb_count++;
     /* Re-evaluate the exit timeout even when no frame arrived. */
     presence_event_t tick_ev;
     if (presence_tick(&g_presence, now_us, &tick_ev)) {
@@ -1105,6 +1109,9 @@ static void app_product_main(void)
 
     /* Confirm this OTA image is healthy (cancels the pending rollback). */
     ota_confirm_boot();
+
+    /* On-board 240x240 status screen (S3-EYE); no-op if the panel is absent. */
+    display_init();
 
     /* Always-on field-service console over USB/UART. */
     provisioning_console_start(&g_cfg);
@@ -1212,6 +1219,21 @@ static void app_product_main(void)
     while (1) {
         esp_task_wdt_reset();
         int64_t now_us = esp_timer_get_time();
+
+        {
+            display_status_t ds = {
+                .device_id = g_cfg.device_id,
+                .server_host = g_cfg.server_host,
+                .server_port = g_cfg.server_port,
+                .session_up = g_mqtt_connected,
+                .presence_state = (int)g_presence.state,
+                .score = g_presence.last_score,
+                .enter_threshold = g_presence.config.enter_confidence,
+                .heartbeats = g_hb_count,
+                .frames_total = g_presence.frames_total,
+            };
+            display_update(&ds);
+        }
 
         /* OTA request delivered via the command topic. */
         if (g_ota_pending) {
@@ -1334,9 +1356,19 @@ static void app_product_main(void)
                 app_publish_retained(g_topic_state, st, strlen(st));
                 status_led_set(ev.state == PRESENCE_STATE_PRESENT
                                    ? STATUS_LED_PRESENT : STATUS_LED_ONLINE);
-                if (ev.state == PRESENCE_STATE_PRESENT) {
+                if (ev.state == PRESENCE_STATE_PRESENT && g_cfg.snapshot_on_enter) {
                     app_send_snapshot(reassembly_buf, reassembly_len, packet.priority);
                 }
+            }
+        }
+
+        /* Periodic frame streaming for training-data collection. */
+        if (g_cfg.snapshot_periodic_ms != 0U) {
+            static int64_t last_periodic_us;
+            int64_t t = esp_timer_get_time();
+            if (t - last_periodic_us >= (int64_t)g_cfg.snapshot_periodic_ms * 1000) {
+                last_periodic_us = t;
+                app_send_snapshot(reassembly_buf, reassembly_len, packet.priority);
             }
         }
 #if APP_STREAM_ENABLE

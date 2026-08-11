@@ -21,7 +21,7 @@ static const char *PROV_HELP =
     "  help                 this text\n"
     "keys: wifi.ssid wifi.pass server.host server.port device.id\n"
     "      presence.enter presence.exit presence.frames presence.timeout_ms\n"
-    "      heartbeat.ms snapshot.on_enter\n"
+    "      heartbeat.ms snapshot.on_enter snapshot.periodic_ms\n"
     "example: set wifi.ssid MyNetwork  /  set server.host 192.168.0.10  /  save  /  reboot\n";
 
 static void prov_handle_line(app_cfg_t *cfg, char *line)

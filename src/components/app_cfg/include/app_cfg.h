@@ -32,6 +32,9 @@ typedef struct {
     uint32_t presence_exit_timeout_ms;
     uint32_t heartbeat_ms;
     uint8_t snapshot_on_enter;
+    /* When nonzero, also stream a frame every N ms regardless of presence —
+     * used to collect scene-specific training data from the install site. */
+    uint32_t snapshot_periodic_ms;
 } app_cfg_t;
 
 /* Load NVS values over compile-time defaults. Always leaves *cfg usable. */

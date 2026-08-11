@@ -52,6 +52,7 @@ static void app_cfg_defaults(app_cfg_t *cfg)
     cfg->presence_exit_timeout_ms = presence_defaults.exit_timeout_ms;
     cfg->heartbeat_ms = 5000;
     cfg->snapshot_on_enter = 1;
+    cfg->snapshot_periodic_ms = 0;
 }
 
 static void app_cfg_get_str(nvs_handle_t handle, const char *key, char *dst, size_t cap)
@@ -93,6 +94,7 @@ esp_err_t app_cfg_load(app_cfg_t *cfg)
     nvs_get_u32(handle, "pr_timeout", &cfg->presence_exit_timeout_ms);
     nvs_get_u32(handle, "hb_ms", &cfg->heartbeat_ms);
     nvs_get_u8(handle, "snap", &cfg->snapshot_on_enter);
+    nvs_get_u32(handle, "snap_period", &cfg->snapshot_periodic_ms);
     nvs_close(handle);
     return ESP_OK;
 }
@@ -117,6 +119,7 @@ esp_err_t app_cfg_save(const app_cfg_t *cfg)
     nvs_set_u32(handle, "pr_timeout", cfg->presence_exit_timeout_ms);
     nvs_set_u32(handle, "hb_ms", cfg->heartbeat_ms);
     nvs_set_u8(handle, "snap", cfg->snapshot_on_enter);
+    nvs_set_u32(handle, "snap_period", cfg->snapshot_periodic_ms);
 
     err = nvs_commit(handle);
     nvs_close(handle);
@@ -210,6 +213,13 @@ esp_err_t app_cfg_set(app_cfg_t *cfg, const char *key, const char *value)
         cfg->snapshot_on_enter = (uint8_t)num;
         return ESP_OK;
     }
+    if (strcmp(key, "snapshot.periodic_ms") == 0) {
+        if (num < 0 || num > 3600000 || (num > 0 && num < 200)) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        cfg->snapshot_periodic_ms = (uint32_t)num;
+        return ESP_OK;
+    }
     return ESP_ERR_INVALID_ARG;
 }
 
@@ -226,5 +236,6 @@ void app_cfg_print(const app_cfg_t *cfg)
     printf("presence.timeout_ms = %lu\n", (unsigned long)cfg->presence_exit_timeout_ms);
     printf("heartbeat.ms        = %lu\n", (unsigned long)cfg->heartbeat_ms);
     printf("snapshot.on_enter   = %u\n", (unsigned)cfg->snapshot_on_enter);
+    printf("snapshot.periodic_ms= %lu\n", (unsigned long)cfg->snapshot_periodic_ms);
     printf("provisioned         = %s\n", app_cfg_provisioned(cfg) ? "yes" : "NO (setup required)");
 }
