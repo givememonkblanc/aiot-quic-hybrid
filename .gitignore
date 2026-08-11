@@ -56,3 +56,21 @@ experiments/tcp_bench/*summary*.json
 
 # datasets (large, never commit)
 datasets/
+
+# accuracy testbed captures (frames, labels, receiver logs)
+experiments/accuracy/frames/
+experiments/accuracy/frames_*/
+experiments/accuracy/out/
+experiments/accuracy/ai_recv.csv
+experiments/accuracy/*.pt
+
+# vehicle-count pipeline: model weights + generated artifacts
+experiments/vehicle_count/*.pt
+experiments/vehicle_count/out/
+
+# production build directory + its local config
+build_prod/
+sdkconfig.prodbuild
+
+# receiver AI-result log (runtime artifact)
+host_receiver/ai_recv.csv

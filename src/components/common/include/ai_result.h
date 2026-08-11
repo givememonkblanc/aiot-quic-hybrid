@@ -10,9 +10,12 @@
 #define AIOT_IMPORTANCE_HIGH_CONF 180U
 
 #define AIOT_AI_RESULT_MAGIC 0xD1U
-#define AIOT_AI_RESULT_VERSION 0x01U
+/* v2 appends raw_score (+3 reserved bytes) to the v1 header. Parsers accept
+ * both; the serializer always emits v2. */
+#define AIOT_AI_RESULT_VERSION 0x02U
 #define AIOT_AI_RESULT_MAX_DETECTIONS 3U
-#define AIOT_AI_RESULT_HEADER_SIZE 16U
+#define AIOT_AI_RESULT_HEADER_SIZE_V1 16U
+#define AIOT_AI_RESULT_HEADER_SIZE 20U
 #define AIOT_AI_RESULT_DETECTION_SIZE 6U
 #define AIOT_AI_RESULT_MAX_PAYLOAD_LEN \
     (AIOT_AI_RESULT_HEADER_SIZE + (AIOT_AI_RESULT_MAX_DETECTIONS * AIOT_AI_RESULT_DETECTION_SIZE))
@@ -42,7 +45,8 @@ typedef struct {
     uint8_t detection_count;
     /* Best per-frame score before the model's detection threshold, so the
      * presence state machine can apply its own (configurable) hysteresis
-     * thresholds. In-memory only — not part of the serialized wire format. */
+     * thresholds. On the wire since v2 — the host needs the pre-threshold
+     * score to score the model against a reference detector. */
     uint8_t raw_score;
     uint16_t source_width;
     uint16_t source_height;

@@ -78,6 +78,10 @@ uint16_t aiot_ai_result_serialize(const aiot_ai_result_t *result, uint8_t *dst, 
     aiot_ai_result_write_u16(dst + 8, result->input_width);
     aiot_ai_result_write_u16(dst + 10, result->input_height);
     aiot_ai_result_write_u32(dst + 12, result->source_sequence);
+    dst[16] = result->raw_score;
+    dst[17] = 0U;   /* reserved */
+    dst[18] = 0U;
+    dst[19] = 0U;
 
     for (uint8_t i = 0; i < detection_count; ++i) {
         const aiot_ai_detection_t *detection = &result->detections[i];
@@ -96,11 +100,20 @@ uint16_t aiot_ai_result_serialize(const aiot_ai_result_t *result, uint8_t *dst, 
 
 bool aiot_ai_result_parse(const uint8_t *payload, uint16_t payload_len, aiot_ai_result_t *result)
 {
-    if (payload == NULL || result == NULL || payload_len < AIOT_AI_RESULT_HEADER_SIZE) {
+    if (payload == NULL || result == NULL || payload_len < AIOT_AI_RESULT_HEADER_SIZE_V1) {
         return false;
     }
 
-    if (payload[0] != AIOT_AI_RESULT_MAGIC || payload[1] != AIOT_AI_RESULT_VERSION) {
+    if (payload[0] != AIOT_AI_RESULT_MAGIC) {
+        return false;
+    }
+
+    uint16_t header_size;
+    if (payload[1] == AIOT_AI_RESULT_VERSION) {
+        header_size = AIOT_AI_RESULT_HEADER_SIZE;
+    } else if (payload[1] == 0x01U) {
+        header_size = AIOT_AI_RESULT_HEADER_SIZE_V1;
+    } else {
         return false;
     }
 
@@ -109,7 +122,7 @@ bool aiot_ai_result_parse(const uint8_t *payload, uint16_t payload_len, aiot_ai_
         return false;
     }
 
-    uint16_t required = (uint16_t)(AIOT_AI_RESULT_HEADER_SIZE +
+    uint16_t required = (uint16_t)(header_size +
         (uint16_t)detection_count * AIOT_AI_RESULT_DETECTION_SIZE);
     if (payload_len < required) {
         return false;
@@ -121,9 +134,12 @@ bool aiot_ai_result_parse(const uint8_t *payload, uint16_t payload_len, aiot_ai_
     result->source_height = aiot_ai_result_read_u16(payload + 6);
     result->input_width = aiot_ai_result_read_u16(payload + 8);
     result->input_height = aiot_ai_result_read_u16(payload + 10);
+    if (header_size == AIOT_AI_RESULT_HEADER_SIZE) {
+        result->raw_score = payload[16];
+    }
 
     for (uint8_t i = 0; i < detection_count; ++i) {
-        uint16_t offset = (uint16_t)(AIOT_AI_RESULT_HEADER_SIZE +
+        uint16_t offset = (uint16_t)(header_size +
             (uint16_t)i * AIOT_AI_RESULT_DETECTION_SIZE);
         result->detections[i].class_id = payload[offset + 0];
         result->detections[i].confidence = payload[offset + 1];
@@ -131,6 +147,12 @@ bool aiot_ai_result_parse(const uint8_t *payload, uint16_t payload_len, aiot_ai_
         result->detections[i].y = payload[offset + 3];
         result->detections[i].width = payload[offset + 4];
         result->detections[i].height = payload[offset + 5];
+        /* v1 carried no pre-threshold score; the best surviving detection is
+         * the closest stand-in. */
+        if (header_size == AIOT_AI_RESULT_HEADER_SIZE_V1 &&
+            result->detections[i].confidence > result->raw_score) {
+            result->raw_score = result->detections[i].confidence;
+        }
     }
 
     return true;

@@ -1012,26 +1012,51 @@ static void app_send_snapshot(const uint8_t *jpeg, size_t len, uint8_t priority)
 #if APP_STREAM_ENABLE
 /* Live view: send the captured JPEG frame on the image track (loss-tolerant
  * datagram chunks), rate-limited. The receiver reassembles it into an MJPEG
- * stream. Independent of presence state. */
-static void app_stream_frame(const uint8_t *jpeg, size_t len, uint8_t priority)
+ * stream. Independent of presence state.
+ *
+ * Returns the gen_ts stamped on every chunk of this frame, or 0 when the
+ * frame was rate-limited away. All chunks share one gen_ts so the receiver
+ * can key the reassembled JPEG by it and join it with the AI result produced
+ * from the same capture. */
+static uint32_t app_stream_frame(const uint8_t *jpeg, size_t len, uint8_t priority)
 {
     static int64_t last_us;
     if (len < 4) {
-        return;
+        return 0U;
     }
     int64_t now = esp_timer_get_time();
     if (last_us != 0 && (now - last_us) < (int64_t)APP_STREAM_INTERVAL_MS * 1000) {
-        return;
+        return 0U;
     }
     last_us = now;
+    uint32_t gen_ts_ms = (uint32_t)(now / 1000);
     for (size_t off = 0; off < len; off += APP_SNAPSHOT_CHUNK_SIZE) {
         size_t chunk = (len - off < APP_SNAPSHOT_CHUNK_SIZE) ? (len - off) : APP_SNAPSHOT_CHUNK_SIZE;
         /* Generous deadline so a frame's chunks aren't shed while queued;
          * dropping a chunk corrupts the whole frame at the receiver. */
-        mqtt_quic_transport_send_hybrid(&g_networkContext, DELIVERY_UNRELIABLE,
-                                        jpeg + off, chunk, AIOT_TRACK_IMAGE,
-                                        priority, 1500U);
+        mqtt_quic_transport_send_hybrid_ts(&g_networkContext, DELIVERY_UNRELIABLE,
+                                           jpeg + off, chunk, AIOT_TRACK_IMAGE,
+                                           priority, 1500U, gen_ts_ms);
     }
+    return gen_ts_ms;
+}
+
+/* The inference result for a streamed frame, on the AI track, stamped with
+ * that frame's gen_ts. The product path otherwise publishes only presence
+ * transitions, which leaves the host with no per-frame score to compare
+ * against a reference detector. */
+static void app_send_ai_result(const aiot_ai_result_t *result,
+                               uint32_t gen_ts_ms, uint8_t priority)
+{
+    uint8_t buf[AIOT_AI_RESULT_MAX_PAYLOAD_LEN];
+    uint16_t n = aiot_ai_result_serialize(result, buf, (uint16_t)sizeof(buf));
+
+    if (n == 0U) {
+        return;
+    }
+    mqtt_quic_transport_send_hybrid_ts(&g_networkContext, DELIVERY_UNRELIABLE,
+                                       buf, n, AIOT_TRACK_AI_RESULT,
+                                       priority, APP_DEADLINE_CLASS1_MS, gen_ts_ms);
 }
 #endif
 
@@ -1298,7 +1323,8 @@ static void app_product_main(void)
 
         /* Inference already ran on this frame inside source_manager; consume
          * that result instead of running the model a second time. */
-        if (source_manager_get_last_ai_result(&g_source_manager, &ai_result, NULL)) {
+        bool have_ai = source_manager_get_last_ai_result(&g_source_manager, &ai_result, NULL);
+        if (have_ai) {
             int64_t t = esp_timer_get_time();
             presence_event_t ev;
             if (presence_update(&g_presence, &ai_result, t, &ev)) {
@@ -1314,7 +1340,10 @@ static void app_product_main(void)
             }
         }
 #if APP_STREAM_ENABLE
-        app_stream_frame(reassembly_buf, reassembly_len, packet.priority);
+        uint32_t frame_ts = app_stream_frame(reassembly_buf, reassembly_len, packet.priority);
+        if (frame_ts != 0U && have_ai) {
+            app_send_ai_result(&ai_result, frame_ts, packet.priority);
+        }
 #endif
         esp_task_wdt_reset();
         reassembly_active = false;

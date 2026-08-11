@@ -131,7 +131,32 @@ static void aiot_image_write(const uint8_t* buf, size_t len)
     rename(tmp, path);   /* atomic swap so readers never see a partial frame */
 }
 
-static void aiot_image_reassemble(const uint8_t* payload, size_t len)
+/*
+ * Accuracy testbed: when AIOT_IMAGE_DIR is set, keep every reassembled frame
+ * instead of only the latest one, named by the gen_ts its chunks carried. The
+ * AI object generated from the same capture carries the same gen_ts, so a
+ * host-side reference detector can label frame_<gen_ts>.jpg and join it with
+ * the device's score without any clock alignment.
+ */
+static void aiot_image_archive(const uint8_t* buf, size_t len, uint32_t gen_ts_ms)
+{
+    const char* dir = getenv("AIOT_IMAGE_DIR");
+    char path[512];
+    FILE* f;
+
+    if (dir == NULL || dir[0] == 0) {
+        return;
+    }
+    snprintf(path, sizeof(path), "%s/frame_%010u.jpg", dir, gen_ts_ms);
+    f = fopen(path, "wb");
+    if (f == NULL) {
+        return;
+    }
+    fwrite(buf, 1, len, f);
+    fclose(f);
+}
+
+static void aiot_image_reassemble(const uint8_t* payload, size_t len, uint32_t gen_ts_ms)
 {
     if (len == 0) {
         return;
@@ -166,11 +191,91 @@ static void aiot_image_reassemble(const uint8_t* payload, size_t len)
         if (aiot_img_buf[i] == 0xFF && aiot_img_buf[i + 1] == 0xD9) {
             size_t frame_len = i + 2;
             aiot_image_write(aiot_img_buf, frame_len);
+            aiot_image_archive(aiot_img_buf, frame_len, gen_ts_ms);
             memmove(aiot_img_buf, aiot_img_buf + frame_len, aiot_img_len - frame_len);
             aiot_img_len -= frame_len;
             break;
         }
     }
+}
+
+/*
+ * AI track (track_id 2): the serialized inference result for one streamed
+ * frame — see src/components/common/include/ai_result.h. v2 carries
+ * raw_score, the model's best score *before* its own detection threshold,
+ * which is what an accuracy comparison needs (a thresholded 0 tells you
+ * nothing about how close the model was). Path override: AIOT_AI_LOG.
+ */
+#define AIOT_TRACK_AI_ID 2U
+#define AIOT_AI_RESULT_MAGIC 0xD1U
+static FILE* aiot_ai_log_file = NULL;
+static int aiot_ai_log_failed = 0;
+
+static void aiot_ai_log(uint64_t recv_us, const char* cid_hex, uint32_t object_seq,
+                        uint32_t gen_ts_ms, const uint8_t* p, size_t len)
+{
+    unsigned version, backend, det_count, raw_score, best_conf = 0;
+    unsigned src_w, src_h, in_w, in_h, header_size;
+    uint32_t source_seq;
+
+    if (len < 16 || p[0] != AIOT_AI_RESULT_MAGIC) {
+        return;
+    }
+    version = p[1];
+    header_size = (version >= 2) ? 20u : 16u;
+    if (len < header_size) {
+        return;
+    }
+    backend = p[2];
+    det_count = p[3];
+    src_w = (unsigned)p[4] | ((unsigned)p[5] << 8);
+    src_h = (unsigned)p[6] | ((unsigned)p[7] << 8);
+    in_w = (unsigned)p[8] | ((unsigned)p[9] << 8);
+    in_h = (unsigned)p[10] | ((unsigned)p[11] << 8);
+    source_seq = (uint32_t)p[12] | ((uint32_t)p[13] << 8) |
+        ((uint32_t)p[14] << 16) | ((uint32_t)p[15] << 24);
+    raw_score = (version >= 2) ? p[16] : 0u;
+
+    for (unsigned i = 0; i < det_count; i++) {
+        size_t off = header_size + (size_t)i * 6u;
+        if (off + 6u > len) {
+            break;
+        }
+        if (p[off + 1] > best_conf) {
+            best_conf = p[off + 1];
+        }
+    }
+    if (version < 2) {
+        raw_score = best_conf;   /* v1 had no pre-threshold score */
+    }
+
+    if (aiot_ai_log_file == NULL) {
+        const char* path;
+        if (aiot_ai_log_failed) {
+            return;
+        }
+        path = getenv("AIOT_AI_LOG");
+        if (path == NULL || path[0] == 0) {
+            path = "ai_recv.csv";
+        }
+        aiot_ai_log_file = fopen(path, "a");
+        if (aiot_ai_log_file == NULL) {
+            fprintf(stderr, "Cannot open AI log %s\n", path);
+            aiot_ai_log_failed = 1;
+            return;
+        }
+        if (ftell(aiot_ai_log_file) == 0) {
+            fprintf(aiot_ai_log_file,
+                "recv_us,cid,object_seq,gen_ts_ms,version,backend,det_count,"
+                "raw_score,best_conf,source_seq,src_w,src_h,in_w,in_h\n");
+        }
+    }
+
+    fprintf(aiot_ai_log_file,
+        "%" PRIu64 ",%s,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
+        recv_us, cid_hex, object_seq, gen_ts_ms, version, backend, det_count,
+        raw_score, best_conf, source_seq, src_w, src_h, in_w, in_h);
+    fflush(aiot_ai_log_file);
 }
 
 static void picoquic_mqtt_log_datagram(picoquic_cnx_t* cnx, const uint8_t* bytes, size_t length)
@@ -227,7 +332,12 @@ static void picoquic_mqtt_log_datagram(picoquic_cnx_t* cnx, const uint8_t* bytes
         }
         if (bytes[1] == AIOT_TRACK_IMAGE_ID) {
             aiot_image_reassemble(bytes + AIOT_OBJECT_HEADER_SIZE,
-                                  length - AIOT_OBJECT_HEADER_SIZE);
+                                  length - AIOT_OBJECT_HEADER_SIZE, gen_ts_ms);
+        }
+        else if (bytes[1] == AIOT_TRACK_AI_ID) {
+            aiot_ai_log(recv_us, cid_hex, object_seq, gen_ts_ms,
+                        bytes + AIOT_OBJECT_HEADER_SIZE,
+                        length - AIOT_OBJECT_HEADER_SIZE);
         }
     }
     else {

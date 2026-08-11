@@ -34,7 +34,7 @@ endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/picoquic-targets.cmake")
 
-set(picoquic_VERSION "${PACKAGE_PREFIX_DIR}/0.0.0-060142ba")
+set(picoquic_VERSION "${PACKAGE_PREFIX_DIR}/0.0.0-99fa9e8")
 set(picoquic_LIBRARIES "${PACKAGE_PREFIX_DIR}/lib/libpicoquic-core.a")
 set(picoquic_INCLUDE_DIR "${PACKAGE_PREFIX_DIR}/include")
 
