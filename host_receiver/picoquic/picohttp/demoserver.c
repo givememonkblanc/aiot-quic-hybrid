@@ -365,6 +365,11 @@ typedef struct {
     picoquic_cnx_t* cnx;
     size_t buf_len;
     uint8_t buf[MQTT_PARSE_BUF_SIZE];
+    /* Command downlink: the topic the device SUBSCRIBEd to (aiot/<id>/cmd)
+     * and the stream it lives on, so the server can PUBLISH back to it. */
+    char sub_topic[128];
+    size_t sub_topic_len;
+    uint64_t sub_stream_id;
 } mqtt_parse_slot_t;
 
 static mqtt_parse_slot_t mqtt_parse_slots[MQTT_PARSE_MAX_CNX];
@@ -388,7 +393,66 @@ static mqtt_parse_slot_t* mqtt_parse_slot(picoquic_cnx_t* cnx)
     }
     free_slot->cnx = cnx;
     free_slot->buf_len = 0;
+    free_slot->sub_topic_len = 0;
     return free_slot;
+}
+
+/*
+ * Command downlink: when the file named by AIOT_CMD_FILE (default
+ * cmd_publish.txt) exists, its content is published once, QoS 0, to the
+ * topic the device subscribed to, then the file is removed. Polled from the
+ * uplink packet path, so worst-case latency is one heartbeat (~5s).
+ * Example:  echo "ota http://192.168.0.38:8070/aiot_quic.bin" > cmd_publish.txt
+ */
+static void mqtt_send_pending_cmd(picoquic_cnx_t* cnx, mqtt_parse_slot_t* slot)
+{
+    if (slot->sub_topic_len == 0) {
+        return;
+    }
+    const char* path = getenv("AIOT_CMD_FILE");
+    if (path == NULL) {
+        path = "cmd_publish.txt";
+    }
+    FILE* f = fopen(path, "rb");
+    if (f == NULL) {
+        return;
+    }
+    char payload[300];
+    size_t n = fread(payload, 1, sizeof(payload) - 1, f);
+    fclose(f);
+    while (n > 0 && (payload[n - 1] == '\n' || payload[n - 1] == '\r')) {
+        n--;
+    }
+    if (n == 0) {
+        return;
+    }
+    remove(path);
+
+    uint8_t pkt[512];
+    size_t topic_len = slot->sub_topic_len;
+    size_t remaining = 2 + topic_len + n;
+    size_t pos = 0;
+    pkt[pos++] = 0x30; /* PUBLISH, QoS 0 */
+    size_t r = remaining;
+    do {
+        uint8_t b = (uint8_t)(r & 0x7f);
+        r >>= 7;
+        if (r != 0) {
+            b |= 0x80;
+        }
+        pkt[pos++] = b;
+    } while (r != 0);
+    pkt[pos++] = (uint8_t)(topic_len >> 8);
+    pkt[pos++] = (uint8_t)(topic_len & 0xff);
+    memcpy(pkt + pos, slot->sub_topic, topic_len);
+    pos += topic_len;
+    memcpy(pkt + pos, payload, n);
+    pos += n;
+
+    (void)picoquic_add_to_stream_with_ctx(cnx, slot->sub_stream_id, pkt, pos, 0, NULL);
+    fprintf(stdout, "MQTT cmd -> %.*s: %.*s\n",
+        (int)topic_len, slot->sub_topic, (int)n, payload);
+    fflush(stdout);
 }
 
 static void mqtt_parse_slot_release(picoquic_cnx_t* cnx)
@@ -492,7 +556,7 @@ static size_t mqtt_packet_length(const uint8_t* buf, size_t len)
 }
 
 static int picoquic_mqtt_handle_packet(picoquic_cnx_t* cnx, uint64_t stream_id,
-    const uint8_t* pkt, size_t pkt_len)
+    mqtt_parse_slot_t* slot, const uint8_t* pkt, size_t pkt_len)
 {
     uint8_t type = (pkt[0] >> 4) & 0x0F;
 
@@ -503,6 +567,34 @@ static int picoquic_mqtt_handle_packet(picoquic_cnx_t* cnx, uint64_t stream_id,
     case 12: /* PINGREQ */
         return picoquic_add_to_stream_with_ctx(cnx, stream_id,
             mqtt_pingresp, sizeof(mqtt_pingresp), 0, NULL);
+    case 8: { /* SUBSCRIBE: remember the (single) topic filter, ack it */
+        size_t pos = 1;
+        while (pos < pkt_len && (pkt[pos] & 0x80) != 0) {
+            pos++;
+        }
+        pos++;
+        if (pos + 2 > pkt_len) {
+            return 0;
+        }
+        uint8_t pid_hi = pkt[pos];
+        uint8_t pid_lo = pkt[pos + 1];
+        pos += 2;
+        if (pos + 2 <= pkt_len) {
+            size_t tl = ((size_t)pkt[pos] << 8) | pkt[pos + 1];
+            pos += 2;
+            if (pos + tl <= pkt_len && tl < sizeof(slot->sub_topic)) {
+                memcpy(slot->sub_topic, &pkt[pos], tl);
+                slot->sub_topic[tl] = '\0';
+                slot->sub_topic_len = tl;
+                slot->sub_stream_id = stream_id;
+                fprintf(stdout, "MQTT SUBSCRIBE %s\n", slot->sub_topic);
+                fflush(stdout);
+            }
+        }
+        uint8_t suback[5] = { 0x90, 0x03, pid_hi, pid_lo, 0x00 };
+        return picoquic_add_to_stream_with_ctx(cnx, stream_id,
+            suback, sizeof(suback), 0, NULL);
+    }
     case 3: { /* PUBLISH (QoS 0) */
         uint8_t qos = (pkt[0] >> 1) & 0x03;
         /* skip fixed header */
@@ -580,9 +672,10 @@ int picoquic_mqtt_server_callback(picoquic_cnx_t* cnx,
                 if (pkt_len > slot->buf_len) {
                     break; /* incomplete */
                 }
-                (void)picoquic_mqtt_handle_packet(cnx, stream_id, slot->buf, pkt_len);
+                (void)picoquic_mqtt_handle_packet(cnx, stream_id, slot, slot->buf, pkt_len);
                 memmove(slot->buf, slot->buf + pkt_len, slot->buf_len - pkt_len);
                 slot->buf_len -= pkt_len;
+                mqtt_send_pending_cmd(cnx, slot);
             }
         }
         return 0;
