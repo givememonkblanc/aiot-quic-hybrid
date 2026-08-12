@@ -67,6 +67,10 @@ experiments/accuracy/*.pt
 # vehicle-count pipeline: model weights + generated artifacts
 experiments/vehicle_count/*.pt
 experiments/vehicle_count/out/
+experiments/vehicle_count/out_*/
+out_tl*/
+yolo11m.pt
+experiments/vehicle_count/yolo11m.pt
 
 # production build directory + its local config
 build_prod/

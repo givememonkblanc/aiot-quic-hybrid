@@ -28,6 +28,8 @@ def main() -> int:
                     default=root / "datasets/vehicle_labels.jsonl")
     ap.add_argument("--model", default="yolo11m.pt")
     ap.add_argument("--conf", type=float, default=0.35)
+    ap.add_argument("--imgsz", type=int, default=640)
+    ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--limit", type=int, default=0, help="cap frames (0 = all)")
     # This host's ROCm build core-dumps in inference; CPU is fast enough for
     # 160x120 frames. Pass --device 0 to try the GPU anyway.
@@ -46,15 +48,16 @@ def main() -> int:
     model = YOLO(args.model)
     n_boxes = 0
     with open(args.out, "w") as out:
-        for batch_start in range(0, len(frames), 64):
-            batch = frames[batch_start : batch_start + 64]
+        for batch_start in range(0, len(frames), args.batch):
+            batch = frames[batch_start : batch_start + args.batch]
             results = model.predict(
                 [str(p) for p in batch], conf=args.conf, verbose=False,
-                classes=list(VEHICLE_CLASSES), device=args.device)
+                classes=list(VEHICLE_CLASSES), device=args.device,
+                imgsz=args.imgsz)
             for path, res in zip(batch, results):
                 h, w = res.orig_shape
                 objs = []
-                for box in res.boxes:
+                for box in (res.boxes or []):
                     cx, cy, bw, bh = box.xywhn[0].tolist()
                     objs.append({
                         "cls": VEHICLE_CLASSES[int(box.cls)],
