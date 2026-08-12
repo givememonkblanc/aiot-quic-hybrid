@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <vector>
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -332,13 +333,13 @@ static uint8_t normalize_axis_start(int position, int cells)
     return static_cast<uint8_t>((static_cast<uint32_t>(position) * 255U) / static_cast<uint32_t>(cells));
 }
 
-static uint8_t normalize_axis_extent(int cells)
+static uint8_t normalize_axis_extent(int span, int cells)
 {
-    if (cells <= 0) {
+    if (span <= 0 || cells <= 0) {
         return 0U;
     }
 
-    uint32_t value = 255U / static_cast<uint32_t>(cells);
+    uint32_t value = (static_cast<uint32_t>(span) * 255U) / static_cast<uint32_t>(cells);
     if (value == 0U) {
         value = 1U;
     }
@@ -424,6 +425,10 @@ static bool populate_fomo_detections(const TfLiteTensor *output,
     threshold = model_asset->detection_threshold == 0U ? 128U : model_asset->detection_threshold;
     result->detection_count = 0U;
 
+    std::vector<uint8_t> best_class(static_cast<size_t>(grid_width * grid_height), 0U);
+    std::vector<uint8_t> best_conf(static_cast<size_t>(grid_width * grid_height), 0U);
+    std::vector<uint8_t> visited(static_cast<size_t>(grid_width * grid_height), 0U);
+
     for (int y = 0; y < grid_height; ++y) {
         for (int x = 0; x < grid_width; ++x) {
             int best_channel = -1;
@@ -468,13 +473,78 @@ static bool populate_fomo_detections(const TfLiteTensor *output,
                 continue;
             }
 
+            size_t index = static_cast<size_t>(y * grid_width + x);
+            best_class[index] = static_cast<uint8_t>(best_channel);
+            best_conf[index] = best_confidence;
+        }
+    }
+
+    for (int y = 0; y < grid_height; ++y) {
+        for (int x = 0; x < grid_width; ++x) {
+            size_t start = static_cast<size_t>(y * grid_width + x);
+            uint8_t class_id = best_class[start];
+            uint8_t confidence = best_conf[start];
+            if (class_id == 0U || confidence == 0U || visited[start] != 0U) {
+                continue;
+            }
+
+            int min_x = x;
+            int min_y = y;
+            int max_x = x;
+            int max_y = y;
+            uint8_t blob_conf = confidence;
+            std::vector<int> stack;
+            stack.push_back(y * grid_width + x);
+            visited[start] = 1U;
+
+            while (!stack.empty()) {
+                int cell = stack.back();
+                stack.pop_back();
+                int cy = cell / grid_width;
+                int cx = cell % grid_width;
+                if (cx < min_x) {
+                    min_x = cx;
+                }
+                if (cy < min_y) {
+                    min_y = cy;
+                }
+                if (cx > max_x) {
+                    max_x = cx;
+                }
+                if (cy > max_y) {
+                    max_y = cy;
+                }
+
+                uint8_t cell_conf = best_conf[static_cast<size_t>(cell)];
+                if (cell_conf > blob_conf) {
+                    blob_conf = cell_conf;
+                }
+
+                for (int ny = cy - 1; ny <= cy + 1; ++ny) {
+                    if (ny < 0 || ny >= grid_height) {
+                        continue;
+                    }
+                    for (int nx = cx - 1; nx <= cx + 1; ++nx) {
+                        if (nx < 0 || nx >= grid_width) {
+                            continue;
+                        }
+                        size_t next = static_cast<size_t>(ny * grid_width + nx);
+                        if (visited[next] != 0U || best_class[next] != class_id || best_conf[next] == 0U) {
+                            continue;
+                        }
+                        visited[next] = 1U;
+                        stack.push_back(ny * grid_width + nx);
+                    }
+                }
+            }
+
             insert_fomo_detection(result,
-                static_cast<uint8_t>(best_channel),
-                best_confidence,
-                normalize_axis_start(x, grid_width),
-                normalize_axis_start(y, grid_height),
-                normalize_axis_extent(grid_width),
-                normalize_axis_extent(grid_height));
+                class_id,
+                blob_conf,
+                normalize_axis_start(min_x, grid_width),
+                normalize_axis_start(min_y, grid_height),
+                normalize_axis_extent(max_x - min_x + 1, grid_width),
+                normalize_axis_extent(max_y - min_y + 1, grid_height));
         }
     }
 
