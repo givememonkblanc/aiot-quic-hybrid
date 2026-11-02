@@ -1,0 +1,739 @@
+/* MOQT draft-21 relay for the alert experiments (RELAY_EXPERIMENT.md).
+ *
+ * Upstream, the relay is the subscriber of the inspection device: the device connects as
+ * QUIC client, the relay subscribes to its result and image tracks and reads the objects.
+ * Downstream, every subscriber session is served by the portable publisher core of the
+ * firmware (src/components/transport/moqt_core.c), so SUBSCRIBE, FETCH and the object
+ * encoding are those of the device. The relay forwards each object whole once it has
+ * arrived, with the publisher priority, group, subgroup and properties of the device; it
+ * never reads the payload.
+ *
+ * Egress policies, per subscriber session:
+ *   fifo      objects in order of arrival at the relay
+ *   prio      draft-21 section 5.1.2 order (moqt_wire_pick of the firmware)
+ *   prio-to   prio, and the image track has an object delivery timeout (section 5.2)
+ *   alert     prio-to, the image bytes in the network are bounded by the alert budget, and
+ *             the connection is probed while a result is unacknowledged
+ *
+ * Every event is written to a JSONL log with CLOCK_MONOTONIC seconds, the clock of the
+ * Python receivers (time.monotonic). */
+#define _GNU_SOURCE
+#include <getopt.h>
+#include <signal.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "moqt_core.h"
+#include "moqt_feasibility.h"
+#include "moqt_scheduler.h"
+#include "quic.h"
+
+enum { POL_FIFO, POL_PRIO, POL_PRIO_TO, POL_ALERT };
+static const char *policy_names[]={"fifo","prio","prio-to","alert"};
+static struct {
+ int policy; unsigned budget_ms,probe_ms,image_timeout_ms,handover_us;
+ const char *image_track; unsigned images_kept; double seconds;
+ bool no_cache; unsigned keepalive_ms; size_t fixed_window; bool window_bdp; bool timeout_all; unsigned rdrive_ms;
+} cfg={.keepalive_ms=1000,.policy=POL_PRIO,.budget_ms=100,.probe_ms=50,.image_timeout_ms=10000,.handover_us=1000,
+       .image_track="evidence/jpeg",.images_kept=64,.seconds=0};
+
+/* Track layout of the firmware: alias = index + 1. */
+#define TRACKS 4
+#define T_RESULTS 1
+static moqt_track_cfg tracks[TRACKS]={
+ {.ns={"aiot","esp32"},.ns_count=2,.name="preview/jpeg",.priority=192,.group_order=MOQT_ORDER_DESCENDING},
+ {.ns={"aiot","esp32"},.ns_count=2,.name="ai/events",.priority=64},
+ {.ns={"aiot","esp32"},.ns_count=2,.name="evidence/jpeg",.priority=128},
+ {.ns={"aiot","esp32"},.ns_count=2,.name="status",.priority=224,.dynamic_groups=true},
+};
+static bool is_image(unsigned track){return track==0||track==2;}
+
+/* -- log ---------------------------------------------------------------------------- */
+static FILE *logf_;
+static void logj(const char *ev,const char *fmt,...){
+ if(!logf_)return;
+ fprintf(logf_,"{\"t\":%.6f,\"ev\":\"%s\"",quic_now_us()/1e6,ev);
+ if(fmt&&*fmt){fputc(',',logf_);va_list a;va_start(a,fmt);vfprintf(logf_,fmt,a);va_end(a);}
+ fputs("}\n",logf_);
+}
+
+/* -- objects ------------------------------------------------------------------------ */
+typedef struct blob { unsigned refs; size_t len; uint8_t data[]; } blob;
+static blob *blob_new(const uint8_t *d,size_t n){blob *b=malloc(sizeof(*b)+n);if(!b)abort();b->refs=1;b->len=n;if(n)memcpy(b->data,d,n);return b;}
+static void blob_drop(blob *b){if(b&&!--b->refs)free(b);}
+static blob *blob_ref(blob *b){if(b)b->refs++;return b;}
+
+typedef struct {
+ bool used; unsigned track; uint64_t group,object,subgroup,serial; uint8_t priority,status;
+ bool has_priority,end_of_group; uint8_t props[MOQT_CORE_PROPS]; size_t props_len; blob *b; uint64_t up_us;
+} stored;
+#define STORE 1024
+static stored store[STORE];
+static uint64_t store_serial;
+static moqt_offer offer_of(const stored *s){
+ return (moqt_offer){.group=s->group,.object=s->object,.subgroup=s->subgroup,.priority=s->priority,.status=s->status,
+  .has_priority=s->has_priority,.end_of_group=s->end_of_group,.props=s->props_len?s->props:NULL,.props_len=s->props_len,
+  .payload_len=s->b?s->b->len:0};
+}
+
+/* -- downstream sessions ------------------------------------------------------------ */
+enum { K_FREE, K_CONTROL, K_REQUEST, K_OBJECT, K_FETCH, K_NOTICE };
+#define HEAD_CAP (MOQT_CORE_HEAD+32)
+#define CONTROL_CAP 65536
+typedef struct {
+ uint8_t kind; bool used,fin,fin_sent,reset_requested,reset_when_acked,blocked,opened;
+ int64_t id;
+ uint8_t *data; size_t cap;                      /* control and request streams */
+ uint8_t head[HEAD_CAP]; size_t head_len; blob *b; /* data streams: head, then payload */
+ size_t len,sent,acked; uint64_t base;
+ uint64_t queued_us,first_us,fin_us,up_us,object_expiry_us,subgroup_timeout_us;
+ unsigned alias,sub,fetch,reset_code; uint64_t group,subgroup,object;
+ uint8_t subscriber_priority,publisher_priority,group_order; bool fill;
+} tx;
+#define TXS 512
+typedef struct {
+ qconn *q; moqt_core core; bool setup_sent,failed,ending[MOQT_CORE_SUBS];
+ tx t[TXS];
+ moqt_rate rate; struct {uint64_t start,opened;size_t bytes,total;bool sampled;} win;
+ size_t window; uint64_t last_window_log; bool probing;
+ unsigned id;
+} dsess;
+
+static int64_t slot_index(dsess *s,int64_t id){for(unsigned i=0;i<TXS;i++)if(s->t[i].used&&s->t[i].opened&&s->t[i].id==id)return i;return -1;}
+static tx *slot_of(dsess *s,int64_t id){int64_t i=slot_index(s,id);return i<0?NULL:&s->t[i];}
+static tx *slot_new(dsess *s){for(unsigned i=0;i<TXS;i++)if(!s->t[i].used){memset(&s->t[i],0,sizeof(tx));s->t[i].used=true;s->t[i].sub=MOQT_CORE_SUBS;return &s->t[i];}return NULL;}
+static void slot_free(tx *x){free(x->data);blob_drop(x->b);memset(x,0,sizeof(*x));}
+static size_t remaining(const tx *x){return x->len-x->sent;}
+
+static void fail(dsess *s,uint64_t code){if(!s->failed){s->failed=true;logj("session_fail","\"sess\":%u,\"code\":%llu",s->id,(unsigned long long)code);quic_close(s->q,code);}}
+
+static int append(tx *x,const uint8_t *d,size_t n,bool fin){
+ if(x->fin)return -1;
+ if(n){
+  if(x->len&&x->acked==x->len){x->base+=x->len;x->len=x->sent=x->acked=0;}
+  /* ngtcp2 reads unacknowledged bytes from this buffer until they are acknowledged, so the
+   * buffer never moves: one allocation, and the bytes start over once all are acknowledged. */
+  if(!x->data){x->cap=CONTROL_CAP;x->data=malloc(x->cap);if(!x->data)abort();}
+  if(x->len+n>x->cap)return -1;
+  memcpy(x->data+x->len,d,n);x->len+=n;
+ }
+ if(fin)x->fin=true;
+ if(!x->queued_us)x->queued_us=quic_now_us();
+ return 0;
+}
+static tx *request_slot(dsess *s,int64_t id){
+ tx *x=slot_of(s,id);
+ if(x)return x->kind==K_REQUEST||x->kind==K_CONTROL?x:NULL;
+ x=slot_new(s);if(!x)return NULL;
+ x->kind=K_REQUEST;x->id=id;x->opened=true;x->subscriber_priority=128;return x;
+}
+static bool result_waiting(dsess *s){
+ for(unsigned i=0;i<TXS;i++){const tx *x=&s->t[i];if(x->used&&x->kind==K_OBJECT&&x->alias==T_RESULTS+1)return true;}
+ return false;
+}
+/* An idle session is kept open; only an outage of the link ends it. */
+static ngtcp2_duration keepalive(void){return cfg.keepalive_ms?(ngtcp2_duration)cfg.keepalive_ms*NGTCP2_MILLISECONDS:UINT64_MAX;}
+/* Result probe: while a result is unacknowledged, a PING after probe_ms of idle link. */
+static void probe_update(dsess *s){
+ if(cfg.policy!=POL_ALERT||!cfg.probe_ms||!s->q->conn)return;
+ bool w=result_waiting(s);
+ if(w==s->probing)return;
+ s->probing=w;
+ ngtcp2_conn_set_keep_alive_timeout(s->q->conn,w?(ngtcp2_duration)cfg.probe_ms*NGTCP2_MILLISECONDS:keepalive());
+}
+static void reset_slot(dsess *s,tx *x,unsigned code){
+ if(!x->used||x->reset_requested)return;
+ if(!x->opened){slot_free(x);return;}
+ if(ngtcp2_conn_shutdown_stream_write(s->q->conn,0,x->id,code)==0)x->reset_requested=true;
+}
+
+/* The next object of a fetch stream once the previous one is acknowledged: ngtcp2 may still
+ * read the head and the payload of an unacknowledged object to send it again. */
+static void fetch_advance(dsess *s,tx *x){
+ if(x->kind!=K_FETCH||x->fin||x->reset_requested||x->acked<x->len)return;
+ x->base+=x->len;x->len=x->sent=x->acked=0;x->head_len=0;blob_drop(x->b);x->b=NULL;
+ void *payload;size_t hl=0,pl=0;
+ int rv=moqt_core_fetch_next(&s->core,x->fetch,x->head,sizeof(x->head),&hl,&payload,&pl);
+ if(rv==1){x->head_len=hl;x->len=hl+pl;x->b=blob_ref(payload);return;}
+ x->fin=true;
+ if(rv<0){ngtcp2_conn_shutdown_stream_write(s->q->conn,0,x->id,MOQT_RST_INTERNAL_ERROR);x->reset_requested=true;}
+}
+
+static void sub_maybe_finish(dsess *s,unsigned sub){
+ if(sub>=MOQT_CORE_SUBS||!s->ending[sub])return;
+ for(unsigned i=0;i<TXS;i++)if(s->t[i].used&&s->t[i].sub==sub&&s->t[i].kind!=K_REQUEST&&s->t[i].kind!=K_CONTROL)return;
+ s->ending[sub]=false;
+ moqt_core_sub_finish(&s->core,sub,"",0);
+}
+
+static void drain(dsess *s);
+static void handle(dsess *s,const moqt_action *a){
+ ngtcp2_conn *conn=s->q->conn;
+ switch(a->kind){
+ case MOQT_ACT_SEND:{
+  tx *x=request_slot(s,a->stream);
+  if(!x||append(x,a->data,a->len,a->fin))fail(s,MOQT_S_INTERNAL_ERROR);
+  break;}
+ case MOQT_ACT_OPEN_BIDI:{
+  int64_t id;
+  if(ngtcp2_conn_open_bidi_stream(conn,&id,NULL)!=0)return;
+  tx *x=request_slot(s,id);
+  if(!x||append(x,a->data,a->len,false)){fail(s,MOQT_S_INTERNAL_ERROR);return;}
+  moqt_core_bidi_opened(&s->core,a->token,id);
+  break;}
+ case MOQT_ACT_FETCH_START:{
+  int64_t id;tx *x=slot_new(s);
+  if(!x||ngtcp2_conn_open_uni_stream(conn,&id,NULL)!=0){
+   if(x)slot_free(x);
+   if(s->core.fetches[a->index].sub>=0)moqt_core_fetch_closed(&s->core,a->index);
+   else moqt_core_stream_cancelled(&s->core,s->core.fetches[a->index].stream);
+   return;
+  }
+  x->kind=K_FETCH;x->id=id;x->opened=true;x->fetch=a->index;x->alias=a->track+1;x->queued_us=quic_now_us();
+  x->subscriber_priority=s->core.fetches[a->index].priority;x->publisher_priority=128;x->group_order=1;
+  x->fill=s->core.fetches[a->index].sub>=0;x->sub=x->fill?(unsigned)s->core.fetches[a->index].sub:MOQT_CORE_SUBS;
+  logj("fetch","\"sess\":%u,\"alias\":%u,\"stream\":%lld,\"fill\":%u",s->id,x->alias,(long long)id,(unsigned)x->fill);
+  fetch_advance(s,x);
+  break;}
+ case MOQT_ACT_FETCH_CANCEL:
+  for(unsigned i=0;i<TXS;i++)if(s->t[i].used&&s->t[i].kind==K_FETCH&&s->t[i].fetch==a->index)reset_slot(s,&s->t[i],(unsigned)a->code);
+  break;
+ case MOQT_ACT_FILL_FAILED:{
+  int64_t id;tx *x=slot_new(s);
+  if(!x)return;
+  if(a->len>sizeof(x->head)||ngtcp2_conn_open_uni_stream(conn,&id,NULL)!=0){slot_free(x);return;}
+  x->kind=K_NOTICE;x->id=id;x->opened=true;memcpy(x->head,a->data,a->len);x->head_len=x->len=a->len;
+  x->reset_when_acked=true;x->reset_code=(unsigned)a->code;x->queued_us=quic_now_us();x->sub=a->index;
+  break;}
+ case MOQT_ACT_SUB_ENDING:if(a->index<MOQT_CORE_SUBS){s->ending[a->index]=true;sub_maybe_finish(s,a->index);}break;
+ case MOQT_ACT_SUB_CANCELLED:{
+  for(unsigned i=0;i<TXS;i++)
+   if(s->t[i].used&&s->t[i].sub==a->index&&s->t[i].kind!=K_FETCH&&s->t[i].kind!=K_REQUEST&&s->t[i].kind!=K_CONTROL)reset_slot(s,&s->t[i],MOQT_RST_CANCELLED);
+  tx *x=slot_of(s,a->stream);
+  if(x&&x->kind==K_REQUEST)reset_slot(s,x,MOQT_RST_CANCELLED);
+  else ngtcp2_conn_shutdown_stream_write(conn,0,a->stream,MOQT_RST_CANCELLED);
+  if(a->index<MOQT_CORE_SUBS)s->ending[a->index]=false;
+  logj("unsubscribed","\"sess\":%u,\"alias\":%u",s->id,a->track+1);
+  break;}
+ case MOQT_ACT_RESET_STREAM:{
+  tx *x=slot_of(s,a->stream);
+  if(x)reset_slot(s,x,(unsigned)a->code);else ngtcp2_conn_shutdown_stream_write(conn,0,a->stream,a->code);
+  break;}
+ case MOQT_ACT_STOP_SENDING:ngtcp2_conn_shutdown_stream_read(conn,0,a->stream,a->code);break;
+ case MOQT_ACT_CLOSE_SESSION:fail(s,a->code);break;
+ case MOQT_ACT_SUBSCRIBED:{
+  const moqt_sub *u=&s->core.subs[a->index];
+  logj("subscribed","\"sess\":%u,\"alias\":%u,\"sub\":%u,\"subscriber_priority\":%u,\"forward\":%u",s->id,a->track+1,a->index,
+       (unsigned)u->subscriber_priority,(unsigned)u->forward);
+  break;}
+ default:break;
+ }
+}
+static void drain(dsess *s){moqt_action a;while(moqt_core_next_action(&s->core,&a))handle(s,&a);}
+
+/* Admits a stored object to one session: one data stream per delivery, opened at once
+ * or, when the peer's stream limit is reached, by tick. */
+static void deliver(dsess *s,unsigned track,const stored *st){
+ if(s->failed||!s->core.peer_setup)return;
+ moqt_offer o=offer_of(st);moqt_delivery d[MOQT_CORE_SUBS];
+ uint64_t now=quic_now_us();
+ int n=moqt_core_publish(&s->core,track,&o,now/1000,d,MOQT_CORE_SUBS);
+ for(int i=0;i<n;i++){
+  if(d[i].datagram||d[i].head_len>HEAD_CAP)continue;
+  tx *x=slot_new(s);
+  if(!x){logj("dropped","\"sess\":%u,\"alias\":%u,\"group\":%llu,\"why\":\"slots\"",s->id,track+1,(unsigned long long)st->group);continue;}
+  x->kind=K_OBJECT;x->fin=true;memcpy(x->head,d[i].head,d[i].head_len);x->head_len=d[i].head_len;
+  x->b=blob_ref(st->b);x->len=x->head_len+(x->b?x->b->len:0);
+  x->queued_us=now;x->up_us=st->up_us;x->group=st->group;x->subgroup=st->subgroup;x->object=st->object;x->alias=track+1;x->sub=d[i].sub;
+  x->subscriber_priority=d[i].subscriber_priority;x->publisher_priority=d[i].publisher_priority;x->group_order=d[i].group_order;
+  x->object_expiry_us=d[i].object_timeout_ms?now+d[i].object_timeout_ms*1000:0;
+  x->subgroup_timeout_us=d[i].subgroup_timeout_ms*1000;
+  if(track==T_RESULTS)x->object_expiry_us=x->subgroup_timeout_us=0; /* results never time out */
+  /* --timeout-all (base reproduction, implicit adaptation of Freeman et al.): every track,
+   * results included, has the delivery timeout, counted from the arrival of the Object at the
+   * relay (the creation time of the device clock is not known here; this errs in its favour) */
+  if(cfg.timeout_all&&cfg.image_timeout_ms){x->object_expiry_us=st->up_us+(uint64_t)cfg.image_timeout_ms*1000;x->subgroup_timeout_us=0;}
+  int64_t id;
+  if(ngtcp2_conn_open_uni_stream(s->q->conn,&id,NULL)==0){x->id=id;x->opened=true;moqt_core_stream_opened(&s->core,x->sub);}
+  if(is_image(track)&&!s->win.start){s->win.start=s->win.opened=now;s->win.bytes=s->win.total=0;s->win.sampled=false;}
+  logj("queued","\"sess\":%u,\"alias\":%u,\"group\":%llu,\"bytes\":%zu,\"opened\":%u",s->id,track+1,(unsigned long long)st->group,x->len,(unsigned)x->opened);
+ }
+ probe_update(s);
+ drain(s);
+}
+
+static void cache_put(dsess *s,unsigned track,const stored *st){
+ if(cfg.no_cache||st->status!=MOQT_STATUS_NORMAL)return;
+ moqt_offer o=offer_of(st);void *evicted=NULL;
+ while(moqt_core_cache_count(&s->core,MOQT_CORE_TRACKS)>=MOQT_CORE_CACHE-1){
+  /* images go first; results only when nothing else is left */
+  void *old=moqt_core_cache_evict(&s->core,moqt_core_cache_count(&s->core,2)?2U:moqt_core_cache_count(&s->core,0)?0U:MOQT_CORE_TRACKS);
+  if(!old)break;
+  blob_drop(old);
+ }
+ if(moqt_core_cache_put(&s->core,track,&o,st->b,st->up_us/1000,&evicted)==0)blob_ref(st->b);
+ blob_drop(evicted);
+}
+
+/* -- downstream QUIC handler -------------------------------------------------------- */
+static unsigned dsess_serial;
+static void d_accepted(qconn *q){
+ dsess *s=calloc(1,sizeof(*s));if(!s)abort();
+ s->q=q;q->app=s;s->id=++dsess_serial;
+ moqt_track_cfg tc[TRACKS];memcpy(tc,tracks,sizeof(tc));
+ tc[2].name=cfg.image_track;
+ if(cfg.policy==POL_PRIO_TO||cfg.policy==POL_ALERT)tc[2].object_timeout_ms=tc[0].object_timeout_ms=cfg.image_timeout_ms;
+ moqt_core_init(&s->core,tc,TRACKS,false);
+ /* A subscriber that joins late or returns finds everything the relay retains. */
+ const stored *order[STORE];unsigned n=0;
+ for(unsigned i=0;i<STORE;i++)if(store[i].used)order[n++]=&store[i];
+ for(unsigned i=1;i<n;i++)for(unsigned j=i;j>0&&order[j]->serial<order[j-1]->serial;j--){const stored *t=order[j];order[j]=order[j-1];order[j-1]=t;}
+ for(unsigned i=0;i<n;i++){
+  moqt_offer o=offer_of(order[i]);moqt_delivery d[1];
+  moqt_core_publish(&s->core,order[i]->track,&o,order[i]->up_us/1000,d,0); /* Largest Object only */
+  cache_put(s,order[i]->track,order[i]);
+ }
+ logj("session","\"sess\":%u,\"conn\":%u,\"role\":\"subscriber\",\"policy\":\"%s\",\"retained\":%u",s->id,q->id,policy_names[cfg.policy],n);
+}
+static void d_opened(qconn *q){
+ dsess *s=q->app;uint8_t b[256];int64_t id;
+ size_t n=moqt_core_setup(&s->core,b,sizeof(b),NULL,NULL);
+ if(!n||ngtcp2_conn_open_uni_stream(q->conn,&id,NULL)!=0){fail(s,MOQT_S_INTERNAL_ERROR);return;}
+ tx *x=slot_new(s);x->kind=K_CONTROL;x->id=id;x->opened=true;append(x,b,n,false);
+ s->setup_sent=true;
+ ngtcp2_conn_set_keep_alive_timeout(q->conn,keepalive());
+}
+static int d_data(qconn *q,int64_t id,const uint8_t *d,size_t n,bool fin){
+ dsess *s=q->app;
+ moqt_core_rx(&s->core,id,d,n,fin,quic_now_us()/1000);
+ drain(s);
+ return 0;
+}
+static void d_acked(qconn *q,int64_t id,uint64_t off,uint64_t n){
+ dsess *s=q->app;tx *x=slot_of(s,id);(void)off;
+ if(!x)return;
+ x->acked+=(size_t)n;
+ if(x->kind==K_FETCH){fetch_advance(s,x);return;}
+ if(x->kind==K_OBJECT&&is_image(x->alias-1)&&s->win.start){
+  uint64_t now=quic_now_us();s->win.bytes+=n;s->win.total+=n;
+  if(now-s->win.start>=1000000){moqt_rate_observe_window(&s->rate,s->win.bytes,now-s->win.start);s->win.start=now;s->win.bytes=0;s->win.sampled=true;}
+ }
+}
+static bool images_in_flight(dsess *s){for(unsigned i=0;i<TXS;i++)if(s->t[i].used&&s->t[i].kind==K_OBJECT&&is_image(s->t[i].alias-1))return true;return false;}
+static void d_closed(qconn *q,int64_t id,bool app_error,uint64_t code){
+ dsess *s=q->app;tx *x=slot_of(s,id);
+ if(!x)return;
+ uint64_t now=quic_now_us();
+ if(x->kind==K_OBJECT){
+  logj("done","\"sess\":%u,\"alias\":%u,\"group\":%llu,\"bytes\":%zu,\"acked\":%zu,\"ok\":%u,\"code\":%llu,\"wait_us\":%llu,\"send_us\":%llu,\"ack_us\":%llu,\"relay_us\":%llu",
+       s->id,x->alias,(unsigned long long)x->group,x->len,x->acked,(unsigned)(!app_error&&!x->reset_requested&&x->acked==x->len),
+       (unsigned long long)(app_error?code:0),
+       (unsigned long long)(x->first_us?x->first_us-x->queued_us:0),(unsigned long long)(x->fin_us&&x->first_us?x->fin_us-x->first_us:0),
+       (unsigned long long)(x->fin_us?now-x->fin_us:0),(unsigned long long)(x->queued_us-x->up_us));
+  if(is_image(x->alias-1)){
+   unsigned keep=x->sub;slot_free(x);x=NULL;
+   /* the rate window closes with the last image under way (estimator 2 of the firmware) */
+   if(!images_in_flight(s)&&s->win.start){
+    uint64_t el=now-s->win.start;
+    if(el>=500000&&s->win.bytes)moqt_rate_observe_window(&s->rate,s->win.bytes,el);
+    else if(!s->win.sampled&&s->win.total&&now-s->win.opened>=200000)moqt_rate_observe_window(&s->rate,s->win.total,now-s->win.opened);
+    memset(&s->win,0,sizeof(s->win));
+   }
+   probe_update(s);sub_maybe_finish(s,keep);drain(s);return;
+  }
+ }
+ uint8_t kind=x->kind;unsigned sub=x->sub,fetch=x->fetch;
+ slot_free(x);
+ probe_update(s);
+ if(kind==K_FETCH){moqt_core_fetch_closed(&s->core,fetch);drain(s);}
+ if(kind!=K_REQUEST&&kind!=K_CONTROL)sub_maybe_finish(s,sub);
+ drain(s);
+}
+static void d_reset(qconn *q,int64_t id,uint64_t code,bool stop){
+ dsess *s=q->app;tx *x=slot_of(s,id);(void)code;
+ if(x&&x->kind!=K_REQUEST&&x->kind!=K_CONTROL){if(stop)x->reset_requested=true;return;}
+ moqt_core_stream_cancelled(&s->core,id);drain(s);
+}
+static void d_tick(qconn *q,uint64_t now){
+ dsess *s=q->app;
+ for(unsigned i=0;i<TXS;i++)s->t[i].blocked=false;
+ /* streams the peer's limit did not allow yet, in the order the policy serves them */
+ for(;;){
+  moqt_wire_job jobs[64];unsigned map[64],m=0;uint64_t ready=0;
+  for(unsigned i=0;i<TXS&&m<64;i++){
+   tx *x=&s->t[i];
+   if(!x->used||x->opened)continue;
+   jobs[m]=(moqt_wire_job){.klass=MOQT_CLASS_OBJECT,.subscriber_priority=x->subscriber_priority,.publisher_priority=x->publisher_priority,
+    .group_order=x->group_order,.subscription=x->sub,.group=x->group,.subgroup=x->subgroup,.object=x->object,.admitted_us=x->queued_us};
+   if(cfg.policy==POL_FIFO)jobs[m].publisher_priority=jobs[m].subscriber_priority=0;
+   map[m]=i;ready|=1ULL<<m;m++;
+  }
+  if(!m)break;
+  int k=moqt_wire_pick(jobs,m,ready);int64_t id;
+  if(k<0||ngtcp2_conn_open_uni_stream(q->conn,&id,NULL)!=0)break;
+  tx *x=&s->t[map[k]];x->id=id;x->opened=true;moqt_core_stream_opened(&s->core,x->sub);
+ }
+ for(unsigned i=0;i<TXS;i++){
+  tx *x=&s->t[i];
+  if(!x->used||x->reset_requested)continue;
+  if(x->reset_when_acked){if(x->len&&x->acked==x->len)reset_slot(s,x,x->reset_code);continue;}
+  if(x->kind==K_FETCH){fetch_advance(s,x);continue;}
+  if(x->kind!=K_OBJECT)continue;
+  bool expired=(x->object_expiry_us&&x->sent<x->len&&now>=x->object_expiry_us)||
+               (x->subgroup_timeout_us&&x->fin_sent&&x->acked<x->len&&now-x->fin_us>=x->subgroup_timeout_us);
+  if(!expired)continue;
+  logj("timeout_reset","\"sess\":%u,\"alias\":%u,\"group\":%llu,\"sent\":%zu,\"acked\":%zu,\"len\":%zu",s->id,x->alias,(unsigned long long)x->group,x->sent,x->acked,x->len);
+  if(!x->opened){unsigned sub=x->sub;slot_free(x);sub_maybe_finish(s,sub);continue;}
+  reset_slot(s,x,MOQT_RST_DELIVERY_TIMEOUT);
+ }
+ moqt_core_tick(&s->core,now/1000);drain(s);
+ if(cfg.policy==POL_ALERT){
+  /* The alert budget of the firmware (app_moq_mus.inc, fine window): a result waits behind
+   * the image bytes in the network, is sent, and crosses half the smallest round trip. */
+  uint64_t rate=s->rate.samples?moqt_rate_value(&s->rate):8192;
+  ngtcp2_conn_info ci;ngtcp2_conn_get_conn_info(q->conn,&ci);
+  uint64_t min_rtt=ci.min_rtt==UINT64_MAX?0:ci.min_rtt/1000;
+  int64_t left=(int64_t)cfg.budget_ms*1000-(int64_t)(160ULL*1000000ULL/(rate?rate:1))-(int64_t)(min_rtt/2)-(int64_t)cfg.handover_us;
+  size_t w=left>0?(size_t)(rate*(uint64_t)left/1000000ULL):0;
+  /* --window-bdp: the window also holds the bytes on the wire, rate x smallest round trip */
+  if(cfg.window_bdp&&left>0)w+=(size_t)(rate*min_rtt/1000000ULL);
+  s->window=cfg.fixed_window?cfg.fixed_window:(w<256?256:w);   /* fixed: ablation, as TCP_NOTSENT_LOWAT */
+  if(now-s->last_window_log>=1000000){
+   s->last_window_log=now;
+   logj("window","\"sess\":%u,\"rate_Bps\":%llu,\"samples\":%u,\"min_rtt_us\":%llu,\"window\":%zu,\"cwnd\":%llu,\"in_flight\":%llu",s->id,
+        (unsigned long long)rate,s->rate.samples,(unsigned long long)min_rtt,s->window,(unsigned long long)ci.cwnd,(unsigned long long)ci.bytes_in_flight);
+  }
+ }
+}
+static int d_pull(qconn *q,int64_t *id,ngtcp2_vec *v,bool *fin){
+ dsess *s=q->app;
+ size_t image_out=0;
+ for(unsigned i=0;i<TXS;i++){const tx *x=&s->t[i];if(x->used&&x->kind==K_OBJECT&&is_image(x->alias-1))image_out+=x->sent-x->acked;}
+ size_t allow=SIZE_MAX;
+ if(cfg.policy==POL_ALERT)allow=image_out>=s->window?0:s->window-image_out;
+ int best=-1;bool best_first=false;moqt_wire_job bj={0};
+ for(unsigned i=0;i<TXS;i++){
+  tx *x=&s->t[i];
+  if(!x->used||!x->opened||x->reset_requested||x->blocked)continue;
+  if(!(x->sent<x->len||(x->fin&&!x->fin_sent)))continue;
+  bool first=x->kind==K_CONTROL||x->kind==K_REQUEST;
+  if(!first&&x->kind==K_OBJECT&&is_image(x->alias-1)&&!allow)continue;
+  moqt_wire_job j={.klass=(uint8_t)(x->kind==K_CONTROL?MOQT_CLASS_CONTROL:first?MOQT_CLASS_REQUEST:MOQT_CLASS_OBJECT),
+   .subscriber_priority=x->subscriber_priority,.publisher_priority=x->publisher_priority,.group_order=x->group_order,.fill=x->fill,
+   .subscription=x->sub,.group=x->group,.subgroup=x->subgroup,.object=x->object,.admitted_us=x->queued_us};
+  if(cfg.policy==POL_FIFO&&!first)j.subscriber_priority=j.publisher_priority=0,j.subscription=0,j.group=j.subgroup=0;
+  bool better;
+  if(best<0)better=true;
+  else if(first!=best_first)better=first;
+  else better=moqt_wire_before(&j,&bj);
+  if(better){best=(int)i;best_first=first;bj=j;}
+ }
+ if(best<0)return 0;
+ tx *x=&s->t[best];
+ size_t left=remaining(x);
+ *id=x->id;
+ if(x->data){v->base=x->data+x->sent;v->len=left;}
+ else if(x->sent<x->head_len){v->base=x->head+x->sent;v->len=x->head_len-x->sent;}
+ else{v->base=x->b?x->b->data+(x->sent-x->head_len):NULL;v->len=left;}
+ if(x->kind==K_OBJECT&&is_image(x->alias-1)&&v->len>allow)v->len=allow;
+ /* one packet at a time, so that a result is chosen as soon as it arrives */
+ if(cfg.policy!=POL_FIFO&&x->kind!=K_CONTROL&&x->kind!=K_REQUEST&&v->len>1200)v->len=1200;
+ *fin=x->fin&&v->len==left;
+ return 1;
+}
+static void d_pushed(qconn *q,int64_t id,size_t n,bool fin){
+ dsess *s=q->app;tx *x=slot_of(s,id);
+ if(!x)return;
+ uint64_t now=quic_now_us();
+ if(!x->first_us&&n)x->first_us=now;
+ x->sent+=n;
+ if(fin&&!x->fin_sent){x->fin_sent=true;x->fin_us=now;}
+}
+static void d_blocked(qconn *q,int64_t id){dsess *s=q->app;tx *x=slot_of(s,id);if(x)x->blocked=true;}
+static void d_gone(qconn *q){
+ dsess *s=q->app;
+ logj("session_end","\"sess\":%u",s->id);
+ for(unsigned i=0;i<TXS;i++)if(s->t[i].used)slot_free(&s->t[i]);
+ void *old;while((old=moqt_core_cache_evict(&s->core,MOQT_CORE_TRACKS)))blob_drop(old);
+ free(s);q->app=NULL;
+}
+static const qhandler down_handler={.opened=d_opened,.data=d_data,.acked=d_acked,.closed=d_closed,.reset=d_reset,
+ .pull=d_pull,.pushed=d_pushed,.blocked=d_blocked,.tick=d_tick,.gone=d_gone};
+
+/* -- upstream: the device ---------------------------------------------------------- */
+typedef struct { int64_t id; bool used,header; uint8_t *buf; size_t len,cap,pos;
+ uint64_t alias,group,subgroup,prev_object; bool has_prev,props,end_of_group,first_object_mode,has_priority; uint8_t priority; } upstream_stream;
+#define UP_STREAMS 64
+typedef struct {
+ qconn *q; bool setup_sent,peer_setup; int64_t control; uint8_t ctl_out[1024]; size_t ctl_len,ctl_sent;
+ struct { int64_t id; uint8_t out[512]; size_t len,sent; uint8_t in[2048]; size_t in_len; int track; } req[TRACKS];
+ unsigned nreq; int alias_track[16];
+ unsigned next_rid; int img_req; bool img_off; uint64_t calm_since,ping_at; unsigned switches;
+ upstream_stream s[UP_STREAMS];
+ uint8_t peer_ctl[2048]; size_t peer_ctl_len; int64_t peer_control;
+} usess;
+
+static void store_object(unsigned track,const upstream_stream *u,uint64_t object,uint8_t status,const uint8_t *props,size_t props_len,
+                         const uint8_t *payload,size_t len){
+ stored *slot=NULL,*oldest_image=NULL;unsigned images=0;
+ for(unsigned i=0;i<STORE;i++){
+  stored *e=&store[i];
+  if(!e->used){if(!slot)slot=e;continue;}
+  if(is_image(e->track)){images++;if(!oldest_image||e->serial<oldest_image->serial)oldest_image=e;}
+ }
+ if(is_image(track)&&images>=cfg.images_kept&&oldest_image){blob_drop(oldest_image->b);memset(oldest_image,0,sizeof(*oldest_image));slot=oldest_image;}
+ if(!slot){fprintf(stderr,"store full\n");return;}
+ if(props_len>MOQT_CORE_PROPS)props_len=0;
+ *slot=(stored){.used=true,.track=track,.group=u->group,.object=object,.subgroup=u->subgroup,.serial=++store_serial,.priority=u->priority,
+  .status=status,.has_priority=u->has_priority,.end_of_group=u->end_of_group,.props_len=props_len,.b=blob_new(payload,len),.up_us=quic_now_us()};
+ if(props_len)memcpy(slot->props,props,props_len);
+ /* integer properties, as the receivers record them: {"type": value} in decimal */
+ char pj[512];size_t pn=0;pj[0]=0;
+ moqt_kvp_it it=moqt_kvp_begin(props,props_len);moqt_kvp k;
+ while(props_len&&moqt_kvp_next(&it,&k)==1&&pn<sizeof(pj)-48)
+  if(!k.is_bytes)pn+=(size_t)snprintf(pj+pn,sizeof(pj)-pn,"%s\"%llu\":%llu",pn?",":"",(unsigned long long)k.type,(unsigned long long)k.value);
+ logj("up_object","\"alias\":%u,\"group\":%llu,\"object\":%llu,\"bytes\":%zu,\"properties\":{%s}",track+1,(unsigned long long)u->group,
+      (unsigned long long)object,len,pj);
+ for(qconn *c=quic_conns();c;c=c->next)
+  if(c->h==&down_handler&&c->app&&!c->closing&&!c->draining){
+   dsess *d=c->app;
+   deliver(d,track,slot);
+   cache_put(d,track,slot);
+  }
+}
+
+/* Parses the subgroup stream as far as complete objects reach. */
+static int parse_subgroup(usess *us,upstream_stream *u){
+ for(;;){
+  moqt_rd r=moqt_rd_of(u->buf+u->pos,u->len-u->pos);
+  if(!u->header){
+   uint64_t flags=moqt_rd_vi(&r);
+   if(r.bad)return 0;
+   if(!(flags<128&&(flags&0x10)))return -1;
+   unsigned mode=(unsigned)((flags&0x06)>>1);
+   if(mode==3)return -1;
+   u->alias=moqt_rd_vi(&r);u->group=moqt_rd_vi(&r);
+   u->subgroup=0;u->first_object_mode=mode==1;
+   if(mode==2)u->subgroup=moqt_rd_vi(&r);
+   u->has_priority=!(flags&0x20);
+   if(u->has_priority)u->priority=moqt_rd_u8(&r);
+   if(r.bad)return 0;
+   u->props=flags&0x01;u->end_of_group=flags&0x08;
+   u->header=true;u->pos=u->len-r.n;continue;
+  }
+  if(!r.n)return 0;
+  uint64_t delta=moqt_rd_vi(&r);
+  const uint8_t *props=NULL;size_t props_len=0;
+  if(u->props){props_len=(size_t)moqt_rd_vi(&r);props=moqt_rd_bytes(&r,props_len);}
+  uint64_t size=moqt_rd_vi(&r);uint8_t status=MOQT_STATUS_NORMAL;const uint8_t *payload=NULL;
+  if(size)payload=moqt_rd_bytes(&r,(size_t)size);
+  else status=(uint8_t)moqt_rd_vi(&r);
+  if(r.bad)return 0;
+  uint64_t object=u->has_prev?u->prev_object+delta+1:delta;
+  u->has_prev=true;u->prev_object=object;
+  if(u->first_object_mode){u->subgroup=object;u->first_object_mode=false;}
+  u->pos=u->len-r.n;
+  int track=u->alias<16?us->alias_track[u->alias]:-1;
+  if(track<0){fprintf(stderr,"unknown alias %llu\n",(unsigned long long)u->alias);continue;}
+  if(!u->has_priority)u->priority=tracks[track].priority;
+  store_object((unsigned)track,u,object,status,props,props_len,payload,(size_t)size);
+ }
+}
+
+static void u_accepted(qconn *q){
+ usess *u=calloc(1,sizeof(*u));if(!u)abort();
+ u->q=q;q->app=u;u->control=-1;u->peer_control=-1;
+ for(unsigned i=0;i<16;i++)u->alias_track[i]=-1;
+ logj("session","\"conn\":%u,\"role\":\"device\"",q->id);
+}
+static const uint8_t sub_prio[TRACKS]={0,64,128,0};
+/* SUBSCRIBE for track t on a new request stream, in request slot k */
+static bool u_sub_one(usess *u,unsigned t,unsigned k){
+ int64_t id;
+ if(ngtcp2_conn_open_bidi_stream(u->q->conn,&id,NULL)!=0)return false;
+ uint8_t *o=u->req[k].out;moqt_wr w=moqt_wr_of(o,sizeof(u->req[0].out));
+ size_t mark=moqt_wr_begin_message(&w,MOQT_MSG_SUBSCRIBE);
+ moqt_wr_vi(&w,1+2*u->next_rid++);                     /* the server uses odd Request IDs */
+ moqt_ns_write(&w,tracks[t].ns,tracks[t].ns_count);
+ const char *name=t==2?cfg.image_track:tracks[t].name;
+ moqt_wr_vi(&w,strlen(name));moqt_wr_bytes(&w,name,strlen(name));
+ moqt_wr_vi(&w,1);moqt_wr_vi(&w,MOQT_P_SUBSCRIBER_PRIORITY);moqt_wr_u8(&w,sub_prio[t]);
+ moqt_wr_end_message(&w,mark);
+ if(w.bad)abort();
+ u->req[k].id=id;u->req[k].len=w.n;u->req[k].sent=0;u->req[k].in_len=0;u->req[k].track=(int)t;
+ return true;
+}
+static void u_subscribe(usess *u){
+ unsigned want[2]={T_RESULTS,2};
+ for(unsigned k=0;k<2;k++){
+  if(!u_sub_one(u,want[k],u->nreq))return;
+  if(want[k]==2)u->img_req=(int)u->nreq;
+  u->nreq++;
+ }
+}
+/* --rdrive-ms (base reproduction, Hamara et al., IEEE MCNA 2025: receiver-driven adaptation of
+ * MoQ by subscribing to and unsubscribing from tracks to hold a latency target). The relay is the
+ * receiver of the device: it probes the first hop every 50 ms (PING), takes the queueing delay as
+ * the latest round trip less the smallest, unsubscribes from the image track when it exceeds the
+ * target and subscribes again when it has stayed below half the target for 300 ms. */
+static void u_tick(qconn *q,uint64_t now){
+ usess *u=q->app;
+ if(!cfg.rdrive_ms||!u||!u->peer_setup||u->nreq<2||!q->conn)return;
+ if(now-u->ping_at>=50000){u->ping_at=now;ngtcp2_conn_set_keep_alive_timeout(q->conn,50*NGTCP2_MILLISECONDS);}
+ ngtcp2_conn_info ci;ngtcp2_conn_get_conn_info(q->conn,&ci);
+ if(ci.min_rtt==UINT64_MAX||!ci.latest_rtt)return;
+ uint64_t queue_us=(ci.latest_rtt-ci.min_rtt)/NGTCP2_MICROSECONDS,target_us=(uint64_t)cfg.rdrive_ms*1000;
+ if(!u->img_off&&queue_us>target_us){
+  ngtcp2_conn_shutdown_stream(q->conn,0,u->req[u->img_req].id,MOQT_RST_CANCELLED);
+  u->img_off=true;u->calm_since=0;u->switches++;
+  logj("rd_unsubscribe","\"queue_us\":%llu,\"switches\":%u",(unsigned long long)queue_us,u->switches);
+ }else if(u->img_off){
+  if(queue_us*2>=target_us){u->calm_since=0;return;}
+  if(!u->calm_since){u->calm_since=now;return;}
+  if(now-u->calm_since<300000)return;
+  if(u_sub_one(u,2,(unsigned)u->img_req)){
+   u->img_off=false;u->switches++;
+   logj("rd_subscribe","\"queue_us\":%llu,\"switches\":%u",(unsigned long long)queue_us,u->switches);
+  }
+ }
+}
+static void u_opened(qconn *q){
+ usess *u=q->app;int64_t id;
+ size_t n=moqt_setup_write_ext(u->ctl_out,sizeof(u->ctl_out),NULL,NULL,"aiot-relay/1",8,0,NULL);
+ if(!n||ngtcp2_conn_open_uni_stream(q->conn,&id,NULL)!=0){quic_close(q,MOQT_S_INTERNAL_ERROR);return;}
+ u->control=id;u->ctl_len=n;u->setup_sent=true;
+ logj("device_handshake","\"conn\":%u",q->id);
+}
+static upstream_stream *ustream(usess *u,int64_t id,bool create){
+ for(unsigned i=0;i<UP_STREAMS;i++)if(u->s[i].used&&u->s[i].id==id)return &u->s[i];
+ if(!create)return NULL;
+ for(unsigned i=0;i<UP_STREAMS;i++)if(!u->s[i].used){memset(&u->s[i],0,sizeof(u->s[i]));u->s[i].used=true;u->s[i].id=id;return &u->s[i];}
+ return NULL;
+}
+static void ustream_free(upstream_stream *s){free(s->buf);memset(s,0,sizeof(*s));}
+static void u_end_tracks(int track){
+ for(qconn *c=quic_conns();c;c=c->next)
+  if(c->h==&down_handler&&c->app){dsess *d=c->app;if(!d->core.tracks[track].ended){moqt_core_track_end(&d->core,(unsigned)track);drain(d);}}
+}
+static int u_data(qconn *q,int64_t id,const uint8_t *d,size_t n,bool fin){
+ usess *u=q->app;
+ bool uni=!ngtcp2_is_bidi_stream(id);
+ if(uni&&(id==u->peer_control||u->peer_control<0)&&!ustream(u,id,false)){
+  /* The first unidirectional stream that starts with SETUP is the control stream. */
+  if(u->peer_control<0){
+   uint64_t t;size_t used;
+   if(moqt21_vi_read(d,n,&t,&used)==1&&t==MOQT_MSG_SETUP)u->peer_control=id;
+  }
+  if(id==u->peer_control){
+   if(u->peer_ctl_len+n<=sizeof(u->peer_ctl)){memcpy(u->peer_ctl+u->peer_ctl_len,d,n);u->peer_ctl_len+=n;}
+   for(;;){
+    uint64_t t;const uint8_t *body;size_t bl,used;
+    if(moqt21_message_read(u->peer_ctl,u->peer_ctl_len,&t,&body,&bl,&used)!=1)break;
+    if(t==MOQT_MSG_SETUP&&!u->peer_setup){u->peer_setup=true;logj("device_setup","\"conn\":%u",q->id);u_subscribe(u);}
+    else if(t==MOQT_MSG_GOAWAY)logj("device_goaway","");
+    memmove(u->peer_ctl,u->peer_ctl+used,u->peer_ctl_len-used);u->peer_ctl_len-=used;
+   }
+   return 0;
+  }
+ }
+ if(!uni){
+  for(unsigned i=0;i<u->nreq;i++)if(u->req[i].id==id){
+   if(u->req[i].in_len+n<=sizeof(u->req[i].in)){memcpy(u->req[i].in+u->req[i].in_len,d,n);u->req[i].in_len+=n;}
+   for(;;){
+    uint64_t t;const uint8_t *body;size_t bl,used;
+    if(moqt21_message_read(u->req[i].in,u->req[i].in_len,&t,&body,&bl,&used)!=1)break;
+    if(t==MOQT_MSG_SUBSCRIBE_OK){
+     moqt_rd r=moqt_rd_of(body,bl);uint64_t alias=moqt_rd_vi(&r);
+     if(!r.bad&&alias<16)u->alias_track[alias]=u->req[i].track;
+     logj("device_subscribed","\"track\":%d,\"alias\":%llu",u->req[i].track,(unsigned long long)alias);
+    }else if(t==MOQT_MSG_PUBLISH_DONE){
+     logj("device_publish_done","\"track\":%d",u->req[i].track);
+     u_end_tracks(u->req[i].track);
+    }else if(t==MOQT_MSG_REQUEST_ERROR)logj("device_request_error","\"track\":%d",u->req[i].track);
+    memmove(u->req[i].in,u->req[i].in+used,u->req[i].in_len-used);u->req[i].in_len-=used;
+   }
+   return 0;
+  }
+  return 0;
+ }
+ upstream_stream *s=ustream(u,id,true);
+ if(!s){fprintf(stderr,"upstream streams exhausted\n");return 0;}
+ if(s->len+n>s->cap){size_t c=s->cap?s->cap*2:16384;while(c<s->len+n)c*=2;s->buf=realloc(s->buf,c);if(!s->buf)abort();s->cap=c;}
+ memcpy(s->buf+s->len,d,n);s->len+=n;
+ if(parse_subgroup(u,s)<0){fprintf(stderr,"bad subgroup stream\n");ustream_free(s);return 0;}
+ if(s->pos>65536){memmove(s->buf,s->buf+s->pos,s->len-s->pos);s->len-=s->pos;s->pos=0;}
+ if(fin)ustream_free(s);
+ return 0;
+}
+static void u_closed(qconn *q,int64_t id,bool app_error,uint64_t code){
+ (void)app_error;(void)code;usess *u=q->app;upstream_stream *s=ustream(u,id,false);if(s)ustream_free(s);
+}
+static void u_reset(qconn *q,int64_t id,uint64_t code,bool stop){
+ usess *u=q->app;upstream_stream *s=ustream(u,id,false);
+ if(s&&!stop){logj("device_reset","\"alias\":%llu,\"group\":%llu,\"code\":%llu",(unsigned long long)s->alias,(unsigned long long)s->group,(unsigned long long)code);ustream_free(s);}
+}
+static int u_pull(qconn *q,int64_t *id,ngtcp2_vec *v,bool *fin){
+ usess *u=q->app;
+ if(u->control>=0&&u->ctl_sent<u->ctl_len){*id=u->control;v->base=u->ctl_out+u->ctl_sent;v->len=u->ctl_len-u->ctl_sent;*fin=false;return 1;}
+ for(unsigned i=0;i<u->nreq;i++)if(u->req[i].sent<u->req[i].len){*id=u->req[i].id;v->base=u->req[i].out+u->req[i].sent;v->len=u->req[i].len-u->req[i].sent;*fin=false;return 1;}
+ return 0;
+}
+static void u_pushed(qconn *q,int64_t id,size_t n,bool fin){
+ (void)fin;usess *u=q->app;
+ if(id==u->control){u->ctl_sent+=n;return;}
+ for(unsigned i=0;i<u->nreq;i++)if(u->req[i].id==id)u->req[i].sent+=n;
+}
+static void u_gone(qconn *q){
+ usess *u=q->app;logj("session_end","\"conn\":%u,\"role\":\"device\"",q->id);
+ for(unsigned i=0;i<UP_STREAMS;i++)if(u->s[i].used)ustream_free(&u->s[i]);
+ free(u);q->app=NULL;
+}
+static const qhandler up_handler={.opened=u_opened,.data=u_data,.closed=u_closed,.reset=u_reset,.pull=u_pull,.pushed=u_pushed,.tick=u_tick,.gone=u_gone};
+
+/* -- main --------------------------------------------------------------------------- */
+static volatile bool stop;
+static uint64_t deadline_us;
+static void on_signal(int sig){(void)sig;stop=true;}
+static void idle(uint64_t now){if(deadline_us&&now>=deadline_us)stop=true;if(logf_)fflush(logf_);}
+
+static int split_addr(const char *s,char *ip,size_t cap,int *port){
+ const char *c=strrchr(s,':');if(!c||(size_t)(c-s)>=cap)return -1;
+ memcpy(ip,s,(size_t)(c-s));ip[c-s]=0;*port=atoi(c+1);return *port>0?0:-1;
+}
+int main(int argc,char **argv){
+ const char *up="0.0.0.0:14568",*down="0.0.0.0:14600",*cert=NULL,*key=NULL,*logp=NULL;unsigned idle_ms=20000;
+ static struct option o[]={{"up",1,0,'u'},{"down",1,0,'d'},{"cert",1,0,'c'},{"key",1,0,'k'},{"log",1,0,'l'},
+  {"policy",1,0,'p'},{"budget-ms",1,0,'b'},{"probe-ms",1,0,'P'},{"image-timeout-ms",1,0,'T'},{"timeout-all",0,0,'A'},{"rdrive-ms",1,0,'R'},{"image-track",1,0,'i'},
+  {"seconds",1,0,'s'},{"keepalive-ms",1,0,'K'},{"idle-ms",1,0,'I'},{"no-cache",0,0,'N'},{"cc",1,0,'C'},{"fixed-window",1,0,'F'},{"window-bdp",0,0,'B'},{0,0,0,0}};
+ for(int ch;(ch=getopt_long(argc,argv,"",o,NULL))!=-1;){
+  switch(ch){
+  case 'u':up=optarg;break; case 'd':down=optarg;break; case 'c':cert=optarg;break; case 'k':key=optarg;break;
+  case 'l':logp=optarg;break; case 'b':cfg.budget_ms=(unsigned)atoi(optarg);break; case 'P':cfg.probe_ms=(unsigned)atoi(optarg);break;
+  case 'T':cfg.image_timeout_ms=(unsigned)atoi(optarg);break; case 'i':cfg.image_track=optarg;break;
+  case 's':cfg.seconds=atof(optarg);break; case 'I':idle_ms=(unsigned)atoi(optarg);break; case 'N':cfg.no_cache=true;break; case 'K':cfg.keepalive_ms=(unsigned)atoi(optarg);break;
+  case 'F':cfg.fixed_window=(size_t)atol(optarg);break;
+  case 'B':cfg.window_bdp=true;break; case 'A':cfg.timeout_all=true;break; case 'R':cfg.rdrive_ms=(unsigned)atoi(optarg);break;
+  case 'C':if(!strcmp(optarg,"bbr"))quic_cc_algo=NGTCP2_CC_ALGO_BBR;
+   else if(strcmp(optarg,"cubic")){fprintf(stderr,"cc: cubic, bbr\n");return 2;}break;
+  case 'p':cfg.policy=-1;for(int i=0;i<4;i++)if(!strcmp(optarg,policy_names[i]))cfg.policy=i;
+   if(cfg.policy<0){fprintf(stderr,"policy: fifo, prio, prio-to, alert\n");return 2;}break;
+  default:return 2;
+  }
+ }
+ if(!cert||!key){fprintf(stderr,"usage: moq_relay --cert C --key K [--up ip:port] [--down ip:port] [--policy P] [--log F]\n");return 2;}
+ if(logp&&!(logf_=fopen(logp,"w"))){perror(logp);return 1;}
+ char ip[64];int port;
+ if(quic_init(cert,key,"moqt-21",idle_ms)){fprintf(stderr,"TLS setup failed\n");return 1;}
+ if(split_addr(up,ip,sizeof(ip),&port)||quic_listen(ip,port,&up_handler,u_accepted)){fprintf(stderr,"listen %s failed\n",up);return 1;}
+ if(split_addr(down,ip,sizeof(ip),&port)||quic_listen(ip,port,&down_handler,d_accepted)){fprintf(stderr,"listen %s failed\n",down);return 1;}
+ signal(SIGINT,on_signal);signal(SIGTERM,on_signal);
+ if(cfg.seconds>0)deadline_us=quic_now_us()+(uint64_t)(cfg.seconds*1e6);
+ logj("start","\"policy\":\"%s\",\"budget_ms\":%u,\"probe_ms\":%u,\"image_timeout_ms\":%u,\"up\":\"%s\",\"down\":\"%s\",\"cache\":%u,\"cc\":\"%s\",\"fixed_window\":%zu,\"window_bdp\":%u,\"timeout_all\":%u,\"rdrive_ms\":%u",
+      policy_names[cfg.policy],cfg.budget_ms,cfg.probe_ms,cfg.image_timeout_ms,up,down,(unsigned)!cfg.no_cache,quic_cc_algo==NGTCP2_CC_ALGO_BBR?"bbr":"cubic",cfg.fixed_window,(unsigned)cfg.window_bdp,(unsigned)cfg.timeout_all,cfg.rdrive_ms);
+ fprintf(stderr,"relay: policy %s, device %s, subscribers %s\n",policy_names[cfg.policy],up,down);
+ quic_run(&stop,idle);
+ logj("stop","");
+ if(logf_)fclose(logf_);
+ return 0;
+}

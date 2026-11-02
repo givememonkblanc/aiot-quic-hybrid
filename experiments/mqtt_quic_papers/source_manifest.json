@@ -1,0 +1,47 @@
+{
+  "retrieved": "2026-09-20",
+  "repositories": [
+    {
+      "name": "paho",
+      "url": "https://github.com/pgOrtiz90/paho.mqtt.golang.git",
+      "head": "9c2f3cd7195ac2ceb07128190410748ff96ea71b"
+    },
+    {
+      "name": "raspberrypi",
+      "url": "https://github.com/tlmat-unican/MQTT-QUIC-for-RaspberryPi.git",
+      "head": "b3286ed3281bdf14b584a06a65de74263c4c654a"
+    },
+    {
+      "name": "volantmq",
+      "url": "https://github.com/fatimafp95/volantmq.git",
+      "head": "566a653773fa2c31e80c311b1ad31b186ac095f4"
+    },
+    {
+      "name": "volantmq_2",
+      "url": "https://github.com/fatimafp95/volantmq_2.git",
+      "head": "566a653773fa2c31e80c311b1ad31b186ac095f4"
+    }
+  ],
+  "papers": [
+    {
+      "file": "fernandez2021.xml",
+      "sha256": "b6a3ebf30d74128d0fb4369ae9eab04b3f0ef5bdb05c1adffaaed17cf34a00ae"
+    },
+    {
+      "file": "jeddou2022.xml",
+      "sha256": "2dafd95ba427fae4d6595480798696fefec3e2b7b66f6075392f771ba4ffa78b"
+    },
+    {
+      "file": "kumar2019.pdf",
+      "sha256": "f836496c8961dd712a795a12bb8b9c440b3bede147b5e3eecabf62de211a2b75"
+    },
+    {
+      "file": "saif2021.pdf",
+      "sha256": "d6d7358888aa2cd05379d53a1de436467d200be02092de53b02c01bc05218c23"
+    },
+    {
+      "file": "saif2023.pdf",
+      "sha256": "de31aa6e0012a8f42db9e9a459503b69ba3cc98e7751e681280df3210caa5943"
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "checked_on": "2026-09-20",
+  "files": [
+    {
+      "path": "references/stream_mapping2026.tex",
+      "url": "https://raw.githubusercontent.com/LabOverWire/mqtt-lib/main/publications/comnet/submission/main.tex",
+      "sha256": "b49d978441d12b4339bac8fb289657679e9f0940cc322d67847d0645f1845073",
+      "bytes": 45215
+    },
+    {
+      "path": "references/stream_mapping2026_readme.txt",
+      "url": "https://raw.githubusercontent.com/LabOverWire/mqtt-lib/main/publications/comnet/README.md",
+      "sha256": "c5f6a45fc83db85ed03c9c31564fd2fe225270830fb8c275d8e2b61f797fbecd",
+      "bytes": 13265
+    }
+  ],
+  "manuscript_last_commit": "8be02fb027bc034ac2c4c14dd4bd5b491a009135",
+  "publication_status": "README says submitted March 2026; acceptance not independently confirmed",
+  "crossref_verified": [
+    {
+      "doi": "10.1109/JIOT.2023.3302160",
+      "published": "2024-02-01",
+      "volume": "11",
+      "issue": "3",
+      "pages": "4924-4933"
+    },
+    {
+      "doi": "10.23919/SoftCOM66362.2025.11197418",
+      "published": "2025-09-18",
+      "pages": "1-6"
+    }
+  ],
+  "not_completed": [
+    "Zenodo data download/verification",
+    "Saif ICNC2024 local PDF download: certificate verification failed",
+    "Luna2025 full text",
+    "Tsurumi2026 full text",
+    "Alqattaa2022 full text"
+  ]
+}

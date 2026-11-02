@@ -1,0 +1,36 @@
+diff --git a/apps/client/src/connection.rs b/apps/client/src/connection.rs
+index 98452b7..043faac 100644
+--- a/apps/client/src/connection.rs
++++ b/apps/client/src/connection.rs
+@@ -202,6 +202,9 @@ impl MoqConnection {
+       None => (authority, 443u16),
+     };
+ 
++    // Local harness compatibility: normalize IPv6 before socket-family selection.
++    let host = host.strip_prefix('[').and_then(|s| s.strip_suffix(']')).unwrap_or(host);
++
+     let mut tls_config = if no_cert_validation {
+       tls::client::build_default_tls_config(
+         Arc::new(tls::rustls::RootCertStore::empty()),
+@@ -245,6 +248,8 @@ impl MoqConnection {
+ }
+ 
+ async fn resolve_host_port(host: &str, port: u16) -> Result<SocketAddr> {
++  // Local harness compatibility: bracketed IPv6 literal from authority.
++  let host = host.strip_prefix('[').and_then(|s| s.strip_suffix(']')).unwrap_or(host);
+   if let Ok(ip) = host.parse::<IpAddr>() {
+     return Ok(SocketAddr::new(ip, port));
+   }
+diff --git a/apps/relay/src/server/config.rs b/apps/relay/src/server/config.rs
+index da5db13..56577cc 100644
+--- a/apps/relay/src/server/config.rs
++++ b/apps/relay/src/server/config.rs
+@@ -351,7 +351,7 @@ fn bind_dual_stack_udp_socket(port: u16, reuse_port: bool) -> Result<UdpSocket>
+   if reuse_port {
+     socket.set_reuse_port(true)?;
+   }
+-  let addr: SocketAddr = (Ipv6Addr::UNSPECIFIED, port).into();
++  let addr: SocketAddr = (Ipv6Addr::LOCALHOST, port).into();
+   socket.bind(&addr.into())?;
+   socket.set_nonblocking(true)?;
+   Ok(socket.into())

@@ -1,0 +1,26 @@
+diff --git a/apps/client/src/connection.rs b/apps/client/src/connection.rs
+index 27ac2bf..fe25ec5 100644
+--- a/apps/client/src/connection.rs
++++ b/apps/client/src/connection.rs
+@@ -162,6 +162,8 @@ impl MoqConnection {
+       None => (authority, 443u16),
+     };
+ 
++    // Local harness: normalize IPv6 authority before socket-family selection.
++    let host = host.strip_prefix('[').and_then(|s|s.strip_suffix(']')).unwrap_or(host);
+     let mut tls_config = if no_cert_validation {
+       tls::client::build_default_tls_config(
+         Arc::new(tls::rustls::RootCertStore::empty()),
+diff --git a/apps/relay/src/server/config.rs b/apps/relay/src/server/config.rs
+index 09a98ac..f884aa9 100644
+--- a/apps/relay/src/server/config.rs
++++ b/apps/relay/src/server/config.rs
+@@ -211,7 +211,7 @@ impl AppConfig {
+ fn bind_dual_stack_udp_socket(port: u16) -> Result<UdpSocket> {
+   let socket = Socket::new(Domain::IPV6, Type::DGRAM, None)?;
+   socket.set_only_v6(false)?;
+-  let addr: SocketAddr = (Ipv6Addr::UNSPECIFIED, port).into();
++  let addr: SocketAddr = (Ipv6Addr::LOCALHOST, port).into();
+   socket.bind(&addr.into())?;
+   socket.set_nonblocking(true)?;
+   Ok(socket.into())

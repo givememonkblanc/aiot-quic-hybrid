@@ -1,0 +1,1785 @@
+[
+  {
+    "core": 0,
+    "priority": 0,
+    "status": "completed",
+    "priority_verified": true,
+    "window_s": 75.01531145199988,
+    "n": 29,
+    "ai_fps": 0.3865877437375736,
+    "ai_mean_s": 2.485562448275862,
+    "ai_p50_s": 2.467635,
+    "ai_p95_s": 2.7730867999999997,
+    "ai_p99_s": 2.9260921599999996,
+    "source_age_p95_s": 3.1218437999999997,
+    "cpu_pct": [
+      75.37077093592511,
+      45.09317851099518
+    ],
+    "tasks": {
+      "ipc0": {
+        "core": 0,
+        "priorities": [
+          24
+        ],
+        "pct": 0.0
+      },
+      "ipc1": {
+        "core": 1,
+        "priorities": [
+          24
+        ],
+        "pct": 0.21415285102420425
+      },
+      "esp_timer": {
+        "core": 0,
+        "priorities": [
+          22
+        ],
+        "pct": 0.43632855896204115
+      },
+      "main": {
+        "core": 0,
+        "priorities": [
+          1,
+          5,
+          18
+        ],
+        "pct": 26.190547823127204
+      },
+      "IDLE0": {
+        "core": 0,
+        "priorities": [
+          0
+        ],
+        "pct": 24.632365010503857
+      },
+      "IDLE1": {
+        "core": 1,
+        "priorities": [
+          0
+        ],
+        "pct": 54.83499843328576
+      },
+      "Tmr Svc": {
+        "core": 0,
+        "priorities": [
+          1
+        ],
+        "pct": 0.0
+      },
+      "prov_cli": {
+        "core": 2147483647,
+        "priorities": [
+          3
+        ],
+        "pct": 1.055399969845715
+      },
+      "net_tx": {
+        "core": 1,
+        "priorities": [
+          5
+        ],
+        "pct": 39.559464584015295
+      },
+      "cam_task": {
+        "core": 0,
+        "priorities": [
+          23
+        ],
+        "pct": 16.580420954845117
+      },
+      "camera_ai": {
+        "core": 0,
+        "priorities": [
+          0
+        ],
+        "pct": 24.119950739429978
+      },
+      "tiT": {
+        "core": 2147483647,
+        "priorities": [
+          18
+        ],
+        "pct": 5.28561984898229
+      },
+      "sys_evt": {
+        "core": 0,
+        "priorities": [
+          20
+        ],
+        "pct": 0.0
+      },
+      "wifi": {
+        "core": 0,
+        "priorities": [
+          23
+        ],
+        "pct": 7.090591225983108
+      },
+      "ev_esp_loop": {
+        "core": 2147483647,
+        "priorities": [
+          5
+        ],
+        "pct": 0.0
+      }
+    },
+    "image_attempts": 75,
+    "image_accepted": 37,
+    "complete_jpegs": 38,
+    "goodput_KiBs": 72.2193968406242,
+    "replay_fps": 10.011289501617854,
+    "replay_missed": 0,
+    "ai_offers": 280,
+    "pending_overwrites": 251,
+    "queue_peak": 64753,
+    "min_internal_free": 53995,
+    "psram_peak": 3158520,
+    "image_admission_rejected": 38,
+    "accepted_cohort_completed": 37,
+    "accepted_cohort_not_completed_within_8s_drain": 0,
+    "mqtt_received": 29,
+    "ai_scheduled_cpu_mean_s": 0.6058541724137931,
+    "cpu_core_seconds_per_complete_KiB": 0.01668027631313005,
+    "deadline_completion_fraction": {
+      "1": 0.0,
+      "2": 0.0,
+      "3": 0.7241379310344828,
+      "5": 1.0
+    },
+    "grid": [
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": true
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": true
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      }
+    ]
+  },
+  {
+    "core": 0,
+    "priority": 1,
+    "status": "completed",
+    "priority_verified": true,
+    "window_s": 75.06679479700688,
+    "n": 61,
+    "ai_fps": 0.8126096254003407,
+    "ai_mean_s": 1.179754,
+    "ai_p50_s": 1.181172,
+    "ai_p95_s": 1.519097,
+    "ai_p99_s": 1.5310181999999999,
+    "source_age_p95_s": 1.719722,
+    "cpu_pct": [
+      99.13602162162162,
+      47.77467162162162
+    ],
+    "tasks": {
+      "ipc0": {
+        "core": 0,
+        "priorities": [
+          24
+        ],
+        "pct": 0.0
+      },
+      "ipc1": {
+        "core": 1,
+        "priorities": [
+          24
+        ],
+        "pct": 0.15516429679744978
+      },
+      "esp_timer": {
+        "core": 0,
+        "priorities": [
+          22
+        ],
+        "pct": 0.42998431642745116
+      },
+      "main": {
+        "core": 0,
+        "priorities": [
+          1,
+          5
+        ],
+        "pct": 23.866185990441856
+      },
+      "IDLE0": {
+        "core": 0,
+        "priorities": [
+          0
+        ],
+        "pct": 0.8559157754225554
+      },
+      "IDLE1": {
+        "core": 1,
+        "priorities": [
+          0
+        ],
+        "pct": 52.2129165866369
+      },
+      "Tmr Svc": {
+        "core": 0,
+        "priorities": [
+          1
+        ],
+        "pct": 0.0
+      },
+      "prov_cli": {
+        "core": 2147483647,
+        "priorities": [
+          3
+        ],
+        "pct": 1.0538243609874545
+      },
+      "net_tx": {
+        "core": 1,
+        "priorities": [
+          5
+        ],
+        "pct": 42.14733158195226
+      },
+      "cam_task": {
+        "core": 0,
+        "priorities": [
+          23
+        ],
+        "pct": 16.187525441966102
+      },
+      "camera_ai": {
+        "core": 0,
+        "priorities": [
+          1
+        ],
+        "pct": 50.58446361317597
+      },
+      "tiT": {
+        "core": 2147483647,
+        "priorities": [
+          18
+        ],
+        "pct": 5.382291813020844
+      },
+      "sys_evt": {
+        "core": 0,
+        "priorities": [
+          20
+        ],
+        "pct": 0.0
+      },
+      "wifi": {
+        "core": 0,
+        "priorities": [
+          23
+        ],
+        "pct": 7.1250376517884035
+      },
+      "ev_esp_loop": {
+        "core": 2147483647,
+        "priorities": [
+          5
+        ],
+        "pct": 0.0
+      }
+    },
+    "image_attempts": 75,
+    "image_accepted": 37,
+    "complete_jpegs": 38,
+    "goodput_KiBs": 72.1698663373731,
+    "replay_fps": 9.53817199650236,
+    "replay_missed": 35,
+    "ai_offers": 281,
+    "pending_overwrites": 220,
+    "queue_peak": 68865,
+    "min_internal_free": 45379,
+    "psram_peak": 3168992,
+    "image_admission_rejected": 38,
+    "accepted_cohort_completed": 37,
+    "accepted_cohort_not_completed_within_8s_drain": 0,
+    "mqtt_received": 61,
+    "ai_scheduled_cpu_mean_s": 0.6064675901639344,
+    "cpu_core_seconds_per_complete_KiB": 0.020356237401975858,
+    "deadline_completion_fraction": {
+      "1": 0.01639344262295082,
+      "2": 1.0,
+      "3": 1.0,
+      "5": 1.0
+    },
+    "grid": [
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": true
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": true
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": true
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": true
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": true
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": true
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      }
+    ]
+  },
+  {
+    "core": 0,
+    "priority": 5,
+    "status": "completed",
+    "priority_verified": true,
+    "window_s": 75.09714119199634,
+    "n": 95,
+    "ai_fps": 1.26502818205981,
+    "ai_mean_s": 0.6656565157894737,
+    "ai_p50_s": 0.59965,
+    "ai_p95_s": 0.9358608,
+    "ai_p99_s": 0.9435309399999999,
+    "source_age_p95_s": 1.0260764,
+    "cpu_pct": [
+      96.09950181121475,
+      26.47309069749403
+    ],
+    "tasks": {
+      "ipc0": {
+        "core": 0,
+        "priorities": [
+          24
+        ],
+        "pct": 0.0
+      },
+      "ipc1": {
+        "core": 1,
+        "priorities": [
+          24
+        ],
+        "pct": 0.011759989752008931
+      },
+      "esp_timer": {
+        "core": 0,
+        "priorities": [
+          22
+        ],
+        "pct": 0.41970249140211463
+      },
+      "main": {
+        "core": 0,
+        "priorities": [
+          1
+        ],
+        "pct": 6.76026982319344
+      },
+      "IDLE0": {
+        "core": 0,
+        "priorities": [
+          0
+        ],
+        "pct": 3.8935766070260995
+      },
+      "IDLE1": {
+        "core": 1,
+        "priorities": [
+          0
+        ],
+        "pct": 73.73487860246293
+      },
+      "Tmr Svc": {
+        "core": 0,
+        "priorities": [
+          1
+        ],
+        "pct": 0.0
+      },
+      "prov_cli": {
+        "core": 2147483647,
+        "priorities": [
+          3
+        ],
+        "pct": 0.6157737491114472
+      },
+      "net_tx": {
+        "core": 1,
+        "priorities": [
+          5
+        ],
+        "pct": 22.9152500309964
+      },
+      "cam_task": {
+        "core": 0,
+        "priorities": [
+          23
+        ],
+        "pct": 13.9900849514974
+      },
+      "camera_ai": {
+        "core": 0,
+        "priorities": [
+          5
+        ],
+        "pct": 70.4586314574783
+      },
+      "tiT": {
+        "core": 2147483647,
+        "priorities": [
+          18
+        ],
+        "pct": 2.923086024167893
+      },
+      "sys_evt": {
+        "core": 0,
+        "priorities": [
+          20
+        ],
+        "pct": 0.0
+      },
+      "wifi": {
+        "core": 0,
+        "priorities": [
+          23
+        ],
+        "pct": 4.27620770216186
+      },
+      "ev_esp_loop": {
+        "core": 2147483647,
+        "priorities": [
+          5
+        ],
+        "pct": 0.0
+      }
+    },
+    "image_attempts": 72,
+    "image_accepted": 31,
+    "complete_jpegs": 8,
+    "goodput_KiBs": 15.187516387395526,
+    "replay_fps": 1.26502818205981,
+    "replay_missed": 660,
+    "ai_offers": 94,
+    "pending_overwrites": 0,
+    "queue_peak": 148021,
+    "min_internal_free": 38999,
+    "psram_peak": 3243996,
+    "image_admission_rejected": 41,
+    "accepted_cohort_completed": 9,
+    "accepted_cohort_not_completed_within_8s_drain": 22,
+    "mqtt_received": 89,
+    "ai_scheduled_cpu_mean_s": 0.5437480421052632,
+    "cpu_core_seconds_per_complete_KiB": 0.08070614666821668,
+    "deadline_completion_fraction": {
+      "1": 0.8947368421052632,
+      "2": 1.0,
+      "3": 1.0,
+      "5": 1.0
+    },
+    "grid": [
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      }
+    ]
+  },
+  {
+    "core": 0,
+    "priority": 6,
+    "status": "completed",
+    "priority_verified": true,
+    "window_s": 75.02299951900204,
+    "n": 96,
+    "ai_fps": 1.2796075952106507,
+    "ai_mean_s": 0.6609645625,
+    "ai_p50_s": 0.5947445,
+    "ai_p95_s": 0.921939,
+    "ai_p99_s": 0.9383644999999999,
+    "source_age_p95_s": 1.0428914999999999,
+    "cpu_pct": [
+      95.87206762335043,
+      27.616167194376118
+    ],
+    "tasks": {
+      "ipc0": {
+        "core": 0,
+        "priorities": [
+          24
+        ],
+        "pct": 0.0
+      },
+      "ipc1": {
+        "core": 1,
+        "priorities": [
+          24
+        ],
+        "pct": 0.011991428571428571
+      },
+      "esp_timer": {
+        "core": 0,
+        "priorities": [
+          22
+        ],
+        "pct": 0.43492857142857144
+      },
+      "main": {
+        "core": 0,
+        "priorities": [
+          1
+        ],
+        "pct": 5.619807142857143
+      },
+      "IDLE0": {
+        "core": 0,
+        "priorities": [
+          0
+        ],
+        "pct": 4.11107
+      },
+      "IDLE1": {
+        "core": 1,
+        "priorities": [
+          0
+        ],
+        "pct": 71.44074
+      },
+      "Tmr Svc": {
+        "core": 0,
+        "priorities": [
+          1
+        ],
+        "pct": 0.0
+      },
+      "prov_cli": {
+        "core": 2147483647,
+        "priorities": [
+          3
+        ],
+        "pct": 0.6361157142857143
+      },
+      "net_tx": {
+        "core": 1,
+        "priorities": [
+          5
+        ],
+        "pct": 24.913944285714287
+      },
+      "cam_task": {
+        "core": 0,
+        "priorities": [
+          23
+        ],
+        "pct": 13.521687142857143
+      },
+      "camera_ai": {
+        "core": 0,
+        "priorities": [
+          6
+        ],
+        "pct": 71.48821142857143
+      },
+      "tiT": {
+        "core": 2147483647,
+        "priorities": [
+          18
+        ],
+        "pct": 3.1882085714285715
+      },
+      "sys_evt": {
+        "core": 0,
+        "priorities": [
+          20
+        ],
+        "pct": 0.0
+      },
+      "wifi": {
+        "core": 0,
+        "priorities": [
+          23
+        ],
+        "pct": 4.6333085714285716
+      },
+      "ev_esp_loop": {
+        "core": 2147483647,
+        "priorities": [
+          5
+        ],
+        "pct": 0.0
+      }
+    },
+    "image_attempts": 73,
+    "image_accepted": 30,
+    "complete_jpegs": 7,
+    "goodput_KiBs": 13.302209803471412,
+    "replay_fps": 1.2796075952106507,
+    "replay_missed": 652,
+    "ai_offers": 96,
+    "pending_overwrites": 0,
+    "queue_peak": 142881,
+    "min_internal_free": 47079,
+    "psram_peak": 3270432,
+    "image_admission_rejected": 43,
+    "accepted_cohort_completed": 7,
+    "accepted_cohort_not_completed_within_8s_drain": 23,
+    "mqtt_received": 93,
+    "ai_scheduled_cpu_mean_s": 0.54262334375,
+    "cpu_core_seconds_per_complete_KiB": 0.09283287261451886,
+    "deadline_completion_fraction": {
+      "1": 0.90625,
+      "2": 1.0,
+      "3": 1.0,
+      "5": 1.0
+    },
+    "grid": [
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      }
+    ]
+  },
+  {
+    "core": 1,
+    "priority": 6,
+    "status": "completed",
+    "priority_verified": true,
+    "window_s": 75.02953961899766,
+    "n": 124,
+    "ai_fps": 1.6526824052190092,
+    "ai_mean_s": 0.545819120967742,
+    "ai_p50_s": 0.5487515000000001,
+    "ai_p95_s": 0.57504395,
+    "ai_p99_s": 0.57667143,
+    "source_age_p95_s": 0.8392833,
+    "cpu_pct": [
+      53.557096861966,
+      95.13043075205613
+    ],
+    "tasks": {
+      "ipc0": {
+        "core": 0,
+        "priorities": [
+          24
+        ],
+        "pct": 0.0
+      },
+      "ipc1": {
+        "core": 1,
+        "priorities": [
+          24
+        ],
+        "pct": 0.08601428202795934
+      },
+      "esp_timer": {
+        "core": 0,
+        "priorities": [
+          22
+        ],
+        "pct": 0.4225585533189191
+      },
+      "main": {
+        "core": 0,
+        "priorities": [
+          1,
+          5
+        ],
+        "pct": 38.56759263281746
+      },
+      "IDLE0": {
+        "core": 0,
+        "priorities": [
+          0
+        ],
+        "pct": 46.51066657811429
+      },
+      "IDLE1": {
+        "core": 1,
+        "priorities": [
+          0
+        ],
+        "pct": 4.8035712227040905
+      },
+      "Tmr Svc": {
+        "core": 0,
+        "priorities": [
+          1
+        ],
+        "pct": 0.0
+      },
+      "prov_cli": {
+        "core": 2147483647,
+        "priorities": [
+          3
+        ],
+        "pct": 0.572497118321552
+      },
+      "net_tx": {
+        "core": 1,
+        "priorities": [
+          5
+        ],
+        "pct": 2.2190427620410245
+      },
+      "cam_task": {
+        "core": 0,
+        "priorities": [
+          23
+        ],
+        "pct": 12.931189445806167
+      },
+      "camera_ai": {
+        "core": 1,
+        "priorities": [
+          6
+        ],
+        "pct": 92.46601032288527
+      },
+      "tiT": {
+        "core": 2147483647,
+        "priorities": [
+          18
+        ],
+        "pct": 0.5272799774022867
+      },
+      "sys_evt": {
+        "core": 0,
+        "priorities": [
+          20
+        ],
+        "pct": 0.0
+      },
+      "wifi": {
+        "core": 0,
+        "priorities": [
+          23
+        ],
+        "pct": 0.9024613898945119
+      },
+      "ev_esp_loop": {
+        "core": 2147483647,
+        "priorities": [
+          5
+        ],
+        "pct": 0.0
+      }
+    },
+    "image_attempts": 51,
+    "image_accepted": 25,
+    "complete_jpegs": 0,
+    "goodput_KiBs": 0.0,
+    "replay_fps": 3.79850391522111,
+    "replay_missed": 466,
+    "ai_offers": 158,
+    "pending_overwrites": 34,
+    "queue_peak": 150077,
+    "min_internal_free": 44359,
+    "psram_peak": 3243952,
+    "image_admission_rejected": 26,
+    "accepted_cohort_completed": 0,
+    "accepted_cohort_not_completed_within_8s_drain": 25,
+    "mqtt_received": 52,
+    "ai_scheduled_cpu_mean_s": 0.543334064516129,
+    "cpu_core_seconds_per_complete_KiB": null,
+    "deadline_completion_fraction": {
+      "1": 1.0,
+      "2": 1.0,
+      "3": 1.0,
+      "5": 1.0
+    },
+    "grid": [
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      }
+    ]
+  },
+  {
+    "core": 1,
+    "priority": 5,
+    "status": "completed",
+    "priority_verified": true,
+    "window_s": 75.0562421450013,
+    "n": 89,
+    "ai_fps": 1.185777457763749,
+    "ai_mean_s": 0.7991555842696629,
+    "ai_p50_s": 0.836637,
+    "ai_p95_s": 1.0040932,
+    "ai_p99_s": 1.01043332,
+    "source_age_p95_s": 1.3223787999999999,
+    "cpu_pct": [
+      48.11243308260045,
+      98.384229707895
+    ],
+    "tasks": {
+      "ipc0": {
+        "core": 0,
+        "priorities": [
+          24
+        ],
+        "pct": 0.0
+      },
+      "ipc1": {
+        "core": 1,
+        "priorities": [
+          24
+        ],
+        "pct": 0.2158570287612848
+      },
+      "esp_timer": {
+        "core": 0,
+        "priorities": [
+          22
+        ],
+        "pct": 0.4424097661548379
+      },
+      "main": {
+        "core": 0,
+        "priorities": [
+          1,
+          5
+        ],
+        "pct": 26.88414436123798
+      },
+      "IDLE0": {
+        "core": 0,
+        "priorities": [
+          0
+        ],
+        "pct": 51.904088279267626
+      },
+      "IDLE1": {
+        "core": 1,
+        "priorities": [
+          0
+        ],
+        "pct": 1.6390577050694988
+      },
+      "Tmr Svc": {
+        "core": 0,
+        "priorities": [
+          1
+        ],
+        "pct": 0.0
+      },
+      "prov_cli": {
+        "core": 2147483647,
+        "priorities": [
+          3
+        ],
+        "pct": 0.8914452430932287
+      },
+      "net_tx": {
+        "core": 1,
+        "priorities": [
+          5
+        ],
+        "pct": 22.994933559820833
+      },
+      "cam_task": {
+        "core": 0,
+        "priorities": [
+          23
+        ],
+        "pct": 14.94822209879689
+      },
+      "camera_ai": {
+        "core": 1,
+        "priorities": [
+          5
+        ],
+        "pct": 71.84319774002405
+      },
+      "tiT": {
+        "core": 2147483647,
+        "priorities": [
+          18
+        ],
+        "pct": 3.4298839013470808
+      },
+      "sys_evt": {
+        "core": 0,
+        "priorities": [
+          20
+        ],
+        "pct": 0.0
+      },
+      "wifi": {
+        "core": 0,
+        "priorities": [
+          23
+        ],
+        "pct": 4.810296028843528
+      },
+      "ev_esp_loop": {
+        "core": 2147483647,
+        "priorities": [
+          5
+        ],
+        "pct": 0.0
+      }
+    },
+    "image_attempts": 75,
+    "image_accepted": 25,
+    "complete_jpegs": 0,
+    "goodput_KiBs": 0.0,
+    "replay_fps": 10.005830008770511,
+    "replay_missed": 0,
+    "ai_offers": 300,
+    "pending_overwrites": 212,
+    "queue_peak": 129517,
+    "min_internal_free": 53919,
+    "psram_peak": 3222720,
+    "image_admission_rejected": 50,
+    "accepted_cohort_completed": 0,
+    "accepted_cohort_not_completed_within_8s_drain": 25,
+    "mqtt_received": 89,
+    "ai_scheduled_cpu_mean_s": 0.5880302696629214,
+    "cpu_core_seconds_per_complete_KiB": null,
+    "deadline_completion_fraction": {
+      "1": 0.5168539325842697,
+      "2": 1.0,
+      "3": 1.0,
+      "5": 1.0
+    },
+    "grid": [
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      }
+    ]
+  },
+  {
+    "core": 1,
+    "priority": 1,
+    "status": "completed",
+    "priority_verified": true,
+    "window_s": 75.0005349560015,
+    "n": 66,
+    "ai_fps": 0.8799937232276863,
+    "ai_mean_s": 1.0580397424242425,
+    "ai_p50_s": 1.0482725,
+    "ai_p95_s": 1.50551025,
+    "ai_p99_s": 1.5432903999999998,
+    "source_age_p95_s": 1.69600025,
+    "cpu_pct": [
+      54.63477257813252,
+      98.43655776925164
+    ],
+    "tasks": {
+      "ipc0": {
+        "core": 0,
+        "priorities": [
+          24
+        ],
+        "pct": 0.0
+      },
+      "ipc1": {
+        "core": 1,
+        "priorities": [
+          24
+        ],
+        "pct": 0.195404375042
+      },
+      "esp_timer": {
+        "core": 0,
+        "priorities": [
+          22
+        ],
+        "pct": 0.4492902053898082
+      },
+      "main": {
+        "core": 0,
+        "priorities": [
+          1,
+          5
+        ],
+        "pct": 29.533556358197192
+      },
+      "IDLE0": {
+        "core": 0,
+        "priorities": [
+          0
+        ],
+        "pct": 45.38905646356867
+      },
+      "IDLE1": {
+        "core": 1,
+        "priorities": [
+          0
+        ],
+        "pct": 1.563885000633143
+      },
+      "Tmr Svc": {
+        "core": 0,
+        "priorities": [
+          1
+        ],
+        "pct": 0.0
+      },
+      "prov_cli": {
+        "core": 2147483647,
+        "priorities": [
+          3
+        ],
+        "pct": 1.1018162179731281
+      },
+      "net_tx": {
+        "core": 1,
+        "priorities": [
+          5
+        ],
+        "pct": 37.51946858032849
+      },
+      "cam_task": {
+        "core": 0,
+        "priorities": [
+          23
+        ],
+        "pct": 15.970364443595175
+      },
+      "camera_ai": {
+        "core": 1,
+        "priorities": [
+          1
+        ],
+        "pct": 55.55922968421928
+      },
+      "tiT": {
+        "core": 2147483647,
+        "priorities": [
+          18
+        ],
+        "pct": 5.048033736243994
+      },
+      "sys_evt": {
+        "core": 0,
+        "priorities": [
+          20
+        ],
+        "pct": 0.0
+      },
+      "wifi": {
+        "core": 0,
+        "priorities": [
+          23
+        ],
+        "pct": 7.672422078821522
+      },
+      "ev_esp_loop": {
+        "core": 2147483647,
+        "priorities": [
+          5
+        ],
+        "pct": 0.0
+      }
+    },
+    "image_attempts": 75,
+    "image_accepted": 38,
+    "complete_jpegs": 37,
+    "goodput_KiBs": 70.33274052187808,
+    "replay_fps": 9.99992867304189,
+    "replay_missed": 0,
+    "ai_offers": 298,
+    "pending_overwrites": 231,
+    "queue_peak": 99705,
+    "min_internal_free": 53919,
+    "psram_peak": 3195172,
+    "image_admission_rejected": 37,
+    "accepted_cohort_completed": 38,
+    "accepted_cohort_not_completed_within_8s_drain": 0,
+    "mqtt_received": 67,
+    "ai_scheduled_cpu_mean_s": 0.6013213181818182,
+    "cpu_core_seconds_per_complete_KiB": 0.02176387969693417,
+    "deadline_completion_fraction": {
+      "1": 0.2727272727272727,
+      "2": 1.0,
+      "3": 1.0,
+      "5": 1.0
+    },
+    "grid": [
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": true
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": true
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": true
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": true
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": true
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": true
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      }
+    ]
+  },
+  {
+    "core": 1,
+    "priority": 0,
+    "status": "completed",
+    "priority_verified": true,
+    "window_s": 75.0641345230033,
+    "n": 34,
+    "ai_fps": 0.45294600698527665,
+    "ai_mean_s": 2.0859939411764707,
+    "ai_p50_s": 2.0167985,
+    "ai_p95_s": 2.39736555,
+    "ai_p99_s": 2.42282468,
+    "source_age_p95_s": 2.7059688,
+    "cpu_pct": [
+      51.45738349443525,
+      70.77309908267763
+    ],
+    "tasks": {
+      "ipc0": {
+        "core": 0,
+        "priorities": [
+          24
+        ],
+        "pct": 0.0
+      },
+      "ipc1": {
+        "core": 1,
+        "priorities": [
+          24
+        ],
+        "pct": 0.2128903041290059
+      },
+      "esp_timer": {
+        "core": 0,
+        "priorities": [
+          22
+        ],
+        "pct": 0.44670635243764634
+      },
+      "main": {
+        "core": 0,
+        "priorities": [
+          1,
+          5
+        ],
+        "pct": 27.399247713211018
+      },
+      "IDLE0": {
+        "core": 0,
+        "priorities": [
+          0
+        ],
+        "pct": 48.57465082092975
+      },
+      "IDLE1": {
+        "core": 1,
+        "priorities": [
+          0
+        ],
+        "pct": 29.209507442153487
+      },
+      "Tmr Svc": {
+        "core": 0,
+        "priorities": [
+          1
+        ],
+        "pct": 0.0
+      },
+      "prov_cli": {
+        "core": 2147483647,
+        "priorities": [
+          3
+        ],
+        "pct": 1.0599115141593058
+      },
+      "net_tx": {
+        "core": 1,
+        "priorities": [
+          5
+        ],
+        "pct": 37.09875442679204
+      },
+      "cam_task": {
+        "core": 0,
+        "priorities": [
+          23
+        ],
+        "pct": 15.309466156380223
+      },
+      "camera_ai": {
+        "core": 1,
+        "priorities": [
+          0
+        ],
+        "pct": 28.337690482414974
+      },
+      "tiT": {
+        "core": 2147483647,
+        "priorities": [
+          18
+        ],
+        "pct": 5.025875751251073
+      },
+      "sys_evt": {
+        "core": 0,
+        "priorities": [
+          20
+        ],
+        "pct": 0.0
+      },
+      "wifi": {
+        "core": 0,
+        "priorities": [
+          23
+        ],
+        "pct": 7.322164745949637
+      },
+      "ev_esp_loop": {
+        "core": 2147483647,
+        "priorities": [
+          5
+        ],
+        "pct": 0.0
+      }
+    },
+    "image_attempts": 75,
+    "image_accepted": 38,
+    "complete_jpegs": 37,
+    "goodput_KiBs": 70.27314972166882,
+    "replay_fps": 10.004777977821846,
+    "replay_missed": 0,
+    "ai_offers": 296,
+    "pending_overwrites": 261,
+    "queue_peak": 97649,
+    "min_internal_free": 53727,
+    "psram_peak": 3191376,
+    "image_admission_rejected": 37,
+    "accepted_cohort_completed": 38,
+    "accepted_cohort_not_completed_within_8s_drain": 0,
+    "mqtt_received": 35,
+    "ai_scheduled_cpu_mean_s": 0.5964969999999999,
+    "cpu_core_seconds_per_complete_KiB": 0.01739362516995918,
+    "deadline_completion_fraction": {
+      "1": 0.0,
+      "2": 0.0,
+      "3": 1.0,
+      "5": 1.0
+    },
+    "grid": [
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 1,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 2,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": false,
+        "meets": false
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": true
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": true
+      },
+      {
+        "deadline_s": 3,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 32,
+        "observed_all_completions_on_time": true,
+        "meets": true
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 64,
+        "observed_all_completions_on_time": true,
+        "meets": true
+      },
+      {
+        "deadline_s": 5,
+        "min_goodput_KiBs": 96,
+        "observed_all_completions_on_time": true,
+        "meets": false
+      }
+    ]
+  }
+]

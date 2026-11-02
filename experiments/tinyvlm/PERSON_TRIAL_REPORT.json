@@ -1,0 +1,151 @@
+{
+  "task": "COCO128 person presence, closed-candidate binary image classification",
+  "limitations": [
+    "Independent reconstruction, not an official TinyVLM checkpoint",
+    "ImageNet initialization and 78 labelled training images; not a zero-shot evaluation",
+    "Only two label-derived captions; small single-seed trial",
+    "Exact-byte duplicates excluded; broader near-duplicate/pretraining overlap not audited",
+    "No localization AP, camera domain evaluation, or ESP32 runtime measurement"
+  ],
+  "split": {
+    "train": {
+      "total": 78,
+      "person": 37,
+      "background": 41
+    },
+    "validation": {
+      "total": 25,
+      "person": 12,
+      "background": 13
+    },
+    "test": {
+      "total": 25,
+      "person": 12,
+      "background": 13
+    }
+  },
+  "excluded_missing_annotation": {
+    "validation": [
+      "000000000250.jpg"
+    ],
+    "test": [
+      "000000000508.jpg"
+    ]
+  },
+  "initial_unverified_validation": {
+    "samples": 25,
+    "correct": 17,
+    "accuracy": 0.68,
+    "person_precision": 0.6666666666666666,
+    "person_recall": 0.6666666666666666,
+    "confusion": {
+      "tp": 8,
+      "tn": 9,
+      "fp": 4,
+      "fn": 4
+    }
+  },
+  "initial_unverified_test": {
+    "samples": 25,
+    "correct": 19,
+    "accuracy": 0.76,
+    "person_precision": 0.6875,
+    "person_recall": 0.9166666666666666,
+    "confusion": {
+      "tp": 11,
+      "tn": 8,
+      "fp": 5,
+      "fn": 1
+    }
+  },
+  "validation": {
+    "samples": 24,
+    "correct": 16,
+    "accuracy": 0.6666666666666666,
+    "person_precision": 0.6666666666666666,
+    "person_recall": 0.6666666666666666,
+    "confusion": {
+      "tp": 8,
+      "tn": 8,
+      "fp": 4,
+      "fn": 4
+    }
+  },
+  "test": {
+    "samples": 24,
+    "correct": 19,
+    "accuracy": 0.7916666666666666,
+    "person_precision": 0.7333333333333333,
+    "person_recall": 0.9166666666666666,
+    "confusion": {
+      "tp": 11,
+      "tn": 8,
+      "fp": 4,
+      "fn": 1
+    }
+  },
+  "clip_teacher_test": {
+    "samples": 24,
+    "correct": 13,
+    "accuracy": 0.5416666666666666,
+    "person_precision": 0.5714285714285714,
+    "person_recall": 0.3333333333333333,
+    "confusion": {
+      "tp": 4,
+      "tn": 9,
+      "fp": 3,
+      "fn": 8
+    }
+  },
+  "teacher_state_sha256": "12f1a938acc3449fcf1a9acfe20a35e200eced3fe9e7b755362374b9fc103aa8",
+  "bundle": {
+    "paper": "2603.00136v1",
+    "implementation": "independent-reconstruction",
+    "smoke_only": false,
+    "input_shape": [
+      1,
+      128,
+      128,
+      3
+    ],
+    "input_scale": 0.007843137718737125,
+    "input_zero_point": -1,
+    "output_scale": 0.0804448351264,
+    "output_zero_point": 7,
+    "dimension": 64,
+    "classes": [
+      "person",
+      "background scene"
+    ],
+    "model_bytes": 703760,
+    "prototype_bytes": 128,
+    "model_sha256": "066e301367e20598150165d84026039a1d18c4b5e78c5c99f6bea09e63eac91c",
+    "prototype_sha256": "58ec8ea3d3a963afa7f46f214faa796315543d96999fe2acb4839ea152c54320",
+    "normalization": "RGB / 127.5 - 1",
+    "resize": "bilinear 128x128",
+    "ops": [
+      "ADD",
+      "CONV_2D",
+      "DEPTHWISE_CONV_2D",
+      "FULLY_CONNECTED",
+      "MEAN",
+      "PAD"
+    ],
+    "training_cache_sha256": "5c105906c1ef8d0e1dbb52fde0b6fd64d607f9b0e069494ec12294eb3c40fe54",
+    "accuracy_validated": false,
+    "esp32_latency_ms": null,
+    "tensor_arena_bytes": null
+  },
+  "hardware_status": "not deployed; awaiting confirmation of temporary firmware test",
+  "esp32_build": {
+    "status": "linked, not deployed",
+    "idf": "5.2.2",
+    "firmware_bytes": 1264688,
+    "firmware_sha256": "f3c0c098e3a6e9c086e4b28d4f72e155dc389e27031e7d52aeabfdbd079ceaa4",
+    "ota_slot_bytes": 2031616
+  },
+  "unit_tests": {
+    "passed": 5,
+    "failed": 0
+  }
+}

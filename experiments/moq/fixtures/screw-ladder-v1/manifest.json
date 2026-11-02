@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "scope": "static identical-source replay, offline encoding",
+  "source": "/home/ryzen395/aiot_quic_baseline/experiments/moq/results/moqt-screw-public-cap24-v14-shaped128-20260923-r1/frame-000001.jpg",
+  "representations": [
+    {
+      "name": "high",
+      "width": 1600,
+      "height": 1200,
+      "quality": null,
+      "bytes": 87454,
+      "sha256": "cd32acb5e60e8b8ecfea6e374bc3387774853c0d2944fe4a8417e61a84baa292"
+    },
+    {
+      "name": "medium",
+      "width": 800,
+      "height": 600,
+      "quality": 75,
+      "bytes": 21253,
+      "sha256": "f3649241d66a08722f4196763f25c03209290652c8ba0663baccfe10710aa9b4"
+    },
+    {
+      "name": "low",
+      "width": 400,
+      "height": 300,
+      "quality": 65,
+      "bytes": 6754,
+      "sha256": "3d52b62336431f86db29c03b9810a9bd0684288df28e8f28a2e639c5f5fe6cac"
+    }
+  ]
+}

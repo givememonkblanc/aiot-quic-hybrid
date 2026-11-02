@@ -1,0 +1,182 @@
+[
+  {
+    "mode": "relay control",
+    "policy": "fifo",
+    "runs": 2,
+    "execution_completed": 2,
+    "generated": 360,
+    "received": 360,
+    "on_time": 360,
+    "queue_peak_bytes": 262144,
+    "verified_recoveries": null,
+    "recovery_mean_ms": null,
+    "recovery_samples_ms": [],
+    "raw_directory": "experiments/mqtt_quic_papers/results/rebind-control-01"
+  },
+  {
+    "mode": "relay control",
+    "policy": "deadline",
+    "runs": 2,
+    "execution_completed": 2,
+    "generated": 360,
+    "received": 360,
+    "on_time": 360,
+    "queue_peak_bytes": 262144,
+    "verified_recoveries": null,
+    "recovery_mean_ms": null,
+    "recovery_samples_ms": [],
+    "raw_directory": "experiments/mqtt_quic_papers/results/rebind-control-01"
+  },
+  {
+    "mode": "relay control",
+    "policy": "latest",
+    "runs": 2,
+    "execution_completed": 2,
+    "generated": 360,
+    "received": 360,
+    "on_time": 360,
+    "queue_peak_bytes": 262144,
+    "verified_recoveries": null,
+    "recovery_mean_ms": null,
+    "recovery_samples_ms": [],
+    "raw_directory": "experiments/mqtt_quic_papers/results/rebind-control-latest-01"
+  },
+  {
+    "mode": "relay control",
+    "policy": "amr_latest_queue_only",
+    "runs": 2,
+    "execution_completed": 2,
+    "generated": 360,
+    "received": 360,
+    "on_time": 360,
+    "queue_peak_bytes": 262144,
+    "verified_recoveries": null,
+    "recovery_mean_ms": null,
+    "recovery_samples_ms": [],
+    "raw_directory": "experiments/mqtt_quic_papers/results/rebind-control-01"
+  },
+  {
+    "mode": "passive rebind",
+    "policy": "fifo",
+    "runs": 2,
+    "execution_completed": 2,
+    "generated": 360,
+    "received": 60,
+    "on_time": 60,
+    "queue_peak_bytes": 6291456,
+    "verified_recoveries": 0,
+    "recovery_mean_ms": null,
+    "recovery_samples_ms": [],
+    "raw_directory": "experiments/mqtt_quic_papers/results/rebind-passive-01"
+  },
+  {
+    "mode": "passive rebind",
+    "policy": "deadline",
+    "runs": 2,
+    "execution_completed": 2,
+    "generated": 360,
+    "received": 60,
+    "on_time": 60,
+    "queue_peak_bytes": 6291456,
+    "verified_recoveries": 0,
+    "recovery_mean_ms": null,
+    "recovery_samples_ms": [],
+    "raw_directory": "experiments/mqtt_quic_papers/results/rebind-passive-01"
+  },
+  {
+    "mode": "passive rebind",
+    "policy": "latest",
+    "runs": 2,
+    "execution_completed": 2,
+    "generated": 360,
+    "received": 60,
+    "on_time": 60,
+    "queue_peak_bytes": 1310720,
+    "verified_recoveries": 0,
+    "recovery_mean_ms": null,
+    "recovery_samples_ms": [],
+    "raw_directory": "experiments/mqtt_quic_papers/results/rebind-passive-latest-01"
+  },
+  {
+    "mode": "passive rebind",
+    "policy": "amr_latest_queue_only",
+    "runs": 2,
+    "execution_completed": 2,
+    "generated": 360,
+    "received": 60,
+    "on_time": 60,
+    "queue_peak_bytes": 262144,
+    "verified_recoveries": 0,
+    "recovery_mean_ms": null,
+    "recovery_samples_ms": [],
+    "raw_directory": "experiments/mqtt_quic_papers/results/rebind-passive-01"
+  },
+  {
+    "mode": "active migrate()",
+    "policy": "fifo",
+    "runs": 2,
+    "execution_completed": 2,
+    "generated": 360,
+    "received": 207,
+    "on_time": 159,
+    "queue_peak_bytes": 6291456,
+    "verified_recoveries": 2,
+    "recovery_mean_ms": 379.1575,
+    "recovery_samples_ms": [
+      380.619,
+      377.696
+    ],
+    "raw_directory": "experiments/mqtt_quic_papers/results/rebind-active-01"
+  },
+  {
+    "mode": "active migrate()",
+    "policy": "deadline",
+    "runs": 2,
+    "execution_completed": 2,
+    "generated": 360,
+    "received": 179,
+    "on_time": 177,
+    "queue_peak_bytes": 6291456,
+    "verified_recoveries": 2,
+    "recovery_mean_ms": 54.7,
+    "recovery_samples_ms": [
+      37.496,
+      71.904
+    ],
+    "raw_directory": "experiments/mqtt_quic_papers/results/rebind-active-01"
+  },
+  {
+    "mode": "active migrate()",
+    "policy": "latest",
+    "runs": 2,
+    "execution_completed": 2,
+    "generated": 360,
+    "received": 178,
+    "on_time": 176,
+    "queue_peak_bytes": 1310720,
+    "verified_recoveries": 2,
+    "recovery_mean_ms": 196.374,
+    "recovery_samples_ms": [
+      36.039,
+      356.709
+    ],
+    "raw_directory": "experiments/mqtt_quic_papers/results/rebind-active-latest-01"
+  },
+  {
+    "mode": "active migrate()",
+    "policy": "amr_latest_queue_only",
+    "runs": 2,
+    "execution_completed": 2,
+    "generated": 360,
+    "received": 160,
+    "on_time": 158,
+    "queue_peak_bytes": 262144,
+    "verified_recoveries": 2,
+    "recovery_mean_ms": 383.31899999999996,
+    "recovery_samples_ms": [
+      396.221,
+      370.417
+    ],
+    "raw_directory": "experiments/mqtt_quic_papers/results/rebind-active-01"
+  }
+]

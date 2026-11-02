@@ -1,0 +1,54 @@
+--- a/crates/mqttv5-cli/src/commands/bench_cmd.rs
++++ b/crates/mqttv5-cli/src/commands/bench_cmd.rs
+@@ -7,7 +7,7 @@
+ use flate2::write::GzEncoder;
+ use flate2::Compression;
+ use mqtt5::time::Duration;
+-use mqtt5::{ConnectOptions, MqttClient, QoS};
++use mqtt5::{ConnectOptions, MqttClient, QoS, SubscribeOptions};
+ use rand::Rng;
+ use serde::{Deserialize, Serialize};
+ use std::io::{Read as _, Write as _};
+@@ -1126,6 +1126,7 @@
+     sub_client: &MqttClient,
+     num_topics: usize,
+     format: PayloadFormat,
++    qos: QoS,
+     topic_samples: &[Arc<std::sync::Mutex<Vec<TimestampedSample>>>],
+     measure_start_nanos: &Arc<AtomicU64>,
+     trace_records: Option<&Arc<std::sync::Mutex<Vec<TraceRecord>>>>,
+@@ -1137,13 +1138,15 @@
+         let trace_clone = trace_records.map(Arc::clone);
+         #[allow(clippy::cast_possible_truncation)]
+         let topic_idx = i as u16;
+-        sub_client
+-            .subscribe(&topic_filter, move |msg| {
++        let (_, granted) = sub_client
++            .subscribe_with_options(&topic_filter, SubscribeOptions { qos, ..Default::default() }, move |msg| {
++                assert_eq!(msg.qos, qos, "unexpected subscriber QoS");
+                 let sent_nanos = decode_timestamp(format, &msg.payload);
+                 if sent_nanos > 0 {
+                     let now_nanos = nanos_as_u64();
+                     let latency_us = (now_nanos.saturating_sub(sent_nanos)) / 1000;
+-                    let base = start_nanos.load(Ordering::Relaxed);
++                    let base = start_nanos.load(Ordering::Acquire);
++                    if base == 0 || sent_nanos < base { return; }
+                     let received_at_us = if base > 0 {
+                         (now_nanos.saturating_sub(base)) / 1000
+                     } else {
+@@ -1168,6 +1171,7 @@
+             })
+             .await
+             .context("failed to subscribe")?;
++        if granted != qos { anyhow::bail!("broker granted unexpected QoS"); }
+     }
+     eprintln!("subscribed to {num_topics} topics");
+     Ok(())
+@@ -1426,6 +1430,7 @@
+         &sub_client,
+         num_topics,
+         format,
++        cmd.qos,
+         &topic_samples,
+         &measure_start_nanos,
+         trace_records.as_ref(),

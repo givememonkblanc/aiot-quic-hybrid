@@ -1,0 +1,54 @@
+{
+  "date": "2026-09-21",
+  "environment": {
+    "tensorflow": "2.17.1",
+    "torch": "2.5.1+rocm6.2",
+    "transformers": "5.5.0",
+    "numpy": "1.26.4",
+    "PIL": "12.1.1"
+  },
+  "unit_tests": {
+    "passed": 5,
+    "checks": [
+      "C/Python cosine parity at all prefix dimensions",
+      "zero-vector/invalid-dimension rejection",
+      "InfoNCE alignment and loss gradients",
+      "proposal geometry",
+      "all 256 RGB values quantize identically in C and Python"
+    ]
+  },
+  "teacher_cache_check": {
+    "pairs": 2,
+    "classes": 2,
+    "input": "synthetic solid color images with matching captions",
+    "teacher": "openai/clip-vit-base-patch32",
+    "features": "real pretrained teacher, safetensors",
+    "state_sha256": "12f1a938acc3449fcf1a9acfe20a35e200eced3fe9e7b755362374b9fc103aa8"
+  },
+  "student_smoke": {
+    "data": "4 random images and random teacher features",
+    "epochs": 1,
+    "batch_size": 2,
+    "accumulation": 2,
+    "model_bytes": 703760,
+    "model_sha256": "cd9c736f0c33d8b018efebc7ac6817d4f9c13a2caa0f304f57f6a64209ef4491",
+    "dimension": 64,
+    "ops": [
+      "ADD",
+      "CONV_2D",
+      "DEPTHWISE_CONV_2D",
+      "FULLY_CONNECTED",
+      "MEAN",
+      "PAD"
+    ],
+    "accuracy_validated": false
+  },
+  "esp32": "encoder cross-compiled using build_mobility_ota compile flags; not flashed or measured",
+  "remaining": [
+    "real captioned training dataset",
+    "held-out accuracy and detection validation",
+    "MCU arena and latency measurements",
+    "application integration and flash-slot fit after trained model selection"
+  ],
+  "integration_test_report": "TEST_REPORT.json"
+}

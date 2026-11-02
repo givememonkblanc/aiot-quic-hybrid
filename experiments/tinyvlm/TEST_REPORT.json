@@ -1,0 +1,98 @@
+{
+  "kind": "integration-test-not-accuracy-benchmark",
+  "data_pairs": 2,
+  "teacher": "openai/clip-vit-base-patch32",
+  "teacher_state_sha256": "12f1a938acc3449fcf1a9acfe20a35e200eced3fe9e7b755362374b9fc103aa8",
+  "hardware": "host CPU; no ESP32 execution",
+  "exports": [
+    {
+      "dimension": 16,
+      "model_bytes": 640976,
+      "ops": [
+        "ADD",
+        "CONV_2D",
+        "DEPTHWISE_CONV_2D",
+        "FULLY_CONNECTED",
+        "MEAN",
+        "PAD"
+      ],
+      "float_int8_embedding_cosine_min": 0.9999887943267822,
+      "class_cosine_max_abs_error": 0.001807570457458496,
+      "host_single_thread_invoke_ms_p50": 0.194291,
+      "host_single_thread_invoke_ms_p95": 0.21337889999999998,
+      "region_forward_count": 14,
+      "region_output_count": 14
+    },
+    {
+      "dimension": 64,
+      "model_bytes": 704024,
+      "ops": [
+        "ADD",
+        "CONV_2D",
+        "DEPTHWISE_CONV_2D",
+        "FULLY_CONNECTED",
+        "MEAN",
+        "PAD"
+      ],
+      "float_int8_embedding_cosine_min": 0.9999834299087524,
+      "class_cosine_max_abs_error": 0.0013079941272735596,
+      "host_single_thread_invoke_ms_p50": 0.1937545,
+      "host_single_thread_invoke_ms_p95": 0.2035939,
+      "region_forward_count": 14,
+      "region_output_count": 14
+    },
+    {
+      "dimension": 256,
+      "model_bytes": 955160,
+      "ops": [
+        "ADD",
+        "CONV_2D",
+        "DEPTHWISE_CONV_2D",
+        "FULLY_CONNECTED",
+        "MEAN",
+        "PAD"
+      ],
+      "float_int8_embedding_cosine_min": 0.9999837875366211,
+      "class_cosine_max_abs_error": 0.0002905353903770447,
+      "host_single_thread_invoke_ms_p50": 0.200768,
+      "host_single_thread_invoke_ms_p95": 0.2659024499999999,
+      "region_forward_count": 14,
+      "region_output_count": 14
+    }
+  ],
+  "guards": [
+    "d16: normal inference rejects test model",
+    "d64: normal inference rejects test model",
+    "d256: normal inference rejects test model",
+    "normal export rejects test weights",
+    "invalid prefix rejected",
+    "existing run cannot be overwritten"
+  ],
+  "head_max_weight_change": 0.000601600855588913,
+  "loss_history": [
+    {
+      "epoch": 1,
+      "loss": 5.481886386871338,
+      "lr": 0.0001
+    },
+    {
+      "epoch": 2,
+      "loss": 5.014385223388672,
+      "lr": 0.0002
+    },
+    {
+      "epoch": 3,
+      "loss": 4.520314693450928,
+      "lr": 0.0003
+    }
+  ],
+  "test_data_description": "Two generated solid-color red/blue images with matching captions; real CLIP teacher features. No detection accuracy validation.",
+  "additional_checks": {
+    "unit_tests_passed": 5,
+    "esp32_encoder_cross_compile": true,
+    "esp32_c_matcher_cross_compile": true,
+    "generated_header_alignment_and_prototype_self_match": true,
+    "host_asan_ubsan": true,
+    "esp32_on_device_execution": false
+  }
+}

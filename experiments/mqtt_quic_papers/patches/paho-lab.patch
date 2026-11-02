@@ -1,0 +1,29 @@
+--- a/client.go
++++ b/client.go
+@@ -155,10 +155,8 @@
+ func NewClient(o *ClientOptions) Client {
+ 	c := &client{}
+ 	c.options = *o
+-	c.options.TLSConfig = &tls.Config{
+-		InsecureSkipVerify: true,
+-		NextProtos:         []string{"quic-echo-example"},
+-	}
++	if c.options.TLSConfig == nil { c.options.TLSConfig = &tls.Config{} } else { c.options.TLSConfig = c.options.TLSConfig.Clone() }
++	c.options.TLSConfig.NextProtos = []string{"quic-echo-example"}
+ 	gets := make(chan string, 100)
+ 	puts := make(chan string, 100)
+ 	c.options.TLSConfig.ClientSessionCache = &clientSessionCache{
+--- a/net.go
++++ b/net.go
+@@ -153,10 +153,7 @@
+ 	case "tcps":
+ 		allProxy := os.Getenv("all_proxy")
+ 		fmt.Printf("TCPS\n")
+-		tlsConf := &tls.Config{
+-			InsecureSkipVerify: true,
+-			PreferServerCipherSuites: true,
+-		}
++		tlsConf := tlsc
+ 		if len(allProxy) == 0 {
+ 			conn, err := tls.DialWithDialer(&net.Dialer{Timeout: timeout}, "tcp", uri.Host, tlsConf)
+ 

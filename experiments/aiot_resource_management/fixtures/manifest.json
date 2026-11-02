@@ -1,0 +1,12 @@
+{
+  "sha256": "aa3c83c12c4e5acd1775acb9208499ba62c8ad9687e2413cc44dd4f579997fae",
+  "bytes": 145989,
+  "dimensions": [
+    1024,
+    1024
+  ],
+  "source": "local live camera latest.jpg frozen for repeated single-frame trace",
+  "capture_period_ms": 100,
+  "image_attempt_period_ms": 1000,
+  "no_ground_truth": true
+}

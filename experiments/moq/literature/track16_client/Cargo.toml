@@ -1,0 +1,13 @@
+[package]
+name = "literature-track16-client"
+version = "0.1.0"
+edition = "2024"
+[workspace]
+[dependencies]
+anyhow = "1"
+bytes = "1"
+tokio = { version = "1", features = ["full"] }
+moqtail = { path = "../vendor/moqtail-draft16/libs/moqtail-rs" }
+wtransport = { version = "0.7.2", features = ["quinn", "dangerous-configuration"] }
+tracing = "0.1"
+serde_json = "1"

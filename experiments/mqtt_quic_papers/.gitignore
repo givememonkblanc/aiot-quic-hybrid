@@ -1,0 +1,5 @@
+.venv/
+upstream/
+references/
+__pycache__/
+legacy_build/

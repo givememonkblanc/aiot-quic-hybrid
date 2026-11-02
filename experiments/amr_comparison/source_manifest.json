@@ -1,0 +1,87 @@
+{
+  "source": "/home/ryzen395/mpquic",
+  "git_head": "164ccb4cfca45ca93d71ea8186330bfd7d46e4a5",
+  "note": "Working-tree snapshot; source may differ from historical deployed binaries. Not linked into ESP32 firmware.",
+  "files": [
+    {
+      "path": "src/client/scheduler/scheduler.h",
+      "sha256": "ad19991945f7772372b0bba0ca3553981b169533cc4a613ffd77e4a75876860d"
+    },
+    {
+      "path": "src/client/scheduler/sched_tof.c",
+      "sha256": "bf94eb27fe31ebc714c0f2621968629862337959a79ee00c469132431922f35c"
+    },
+    {
+      "path": "src/client/scheduler/sched_rssi_aware.c",
+      "sha256": "15840f05ae3c1bca094597b1a9445ceb649959babc4c779c4d7d151ed5c49be2"
+    },
+    {
+      "path": "src/client/scheduler/sched_spquic.c",
+      "sha256": "fa8c598524104f4c54a16ceda327bea79bd284d57bddce813f0ff281d4ff2f6b"
+    },
+    {
+      "path": "src/client/scheduler/sched_common.h",
+      "sha256": "334fb5a5767536c9f9125cd8257ca129302d17c9e6f38c97a965c5c02ee5875c"
+    },
+    {
+      "path": "src/client/scheduler/sched_pqi.c",
+      "sha256": "8fb49da69cd961eaa19e316651d7d965fdfe2ca85679878d2209c932bca0962a"
+    },
+    {
+      "path": "src/client/scheduler/scheduler.c",
+      "sha256": "71cf3216f6ae2797c91f2eb4bc2f4785ea9cc60c1e4977da3a5b1e6353ee5cbb"
+    },
+    {
+      "path": "src/client/scheduler/sched_minrtt.c",
+      "sha256": "1bfae6688e39463a1d292d6dc42dd46500a48b2fd57dd6edda63b3e702792b91"
+    },
+    {
+      "path": "src/client/scheduler/sched_pqi.h",
+      "sha256": "def1a4552e175355f76d4267a93b29c770b7d67a4fe9a2aa91df0fc893c4678c"
+    },
+    {
+      "path": "src/client/scheduler/sched_blest.c",
+      "sha256": "44e5914321f56cef2a246ee4337adb8a579c727346ad8c06a535b700ae6d2832"
+    },
+    {
+      "path": "src/client/scheduler/sched_ecf.c",
+      "sha256": "3d2a44a0e6ee758e08775c2a1d7567951405a111ec9aa569eee69a4c2c7f9744"
+    },
+    {
+      "path": "src/client/scheduler/sched_roundrobin.c",
+      "sha256": "0023f5dc47a33ebe89956ca2cdbbbb9283f152c98866450a8e9c986ffced18a5"
+    },
+    {
+      "path": "src/client/client_loop.c",
+      "sha256": "12d976127f886370a34f2972d77af5cd6e59bff055ef19454cb99de7cfcc9d46"
+    },
+    {
+      "path": "src/client/client_paths.c",
+      "sha256": "2b07cdf7ddd452bfcc5faf2dc3bdd52c35ad6a9fdb58e55e6c6b90a9dca9c408"
+    },
+    {
+      "path": "src/client/client_runtime.h",
+      "sha256": "c3fa59aca9dea64dc84ce9a60443a425198a067a08da0196022a0853bf2b38b5"
+    },
+    {
+      "path": "src/client/client_options.c",
+      "sha256": "fea8ca9450dabb56f228c788732cf912d5acf5f05f5dd39f52301893161b23c3"
+    },
+    {
+      "path": "src/client/client_session.c",
+      "sha256": "daf5a542c9f7c8f13cce1a8818fa1382bb1831919d48ebd1fb876ae6ea7dc114"
+    },
+    {
+      "path": "src/client/client_uploader.c",
+      "sha256": "a4344d3f57d8eb9f1331bbe8822d7a3693c3f226a1f0647f0a24e968adf5d2e7"
+    },
+    {
+      "path": "src/client/client_qlogger.h",
+      "sha256": "aeddbf4bd6c7a007facdd2be9617e18b93380a77daca853c202cab5ef0138a21"
+    },
+    {
+      "path": "src/client/camera.h",
+      "sha256": "cc3d882045eb214068eb23ba6d7c9db21f8db33a372fcb8c592df2c508dc62cb"
+    }
+  ]
+}

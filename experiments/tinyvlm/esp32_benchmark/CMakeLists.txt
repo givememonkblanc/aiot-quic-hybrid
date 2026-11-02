@@ -1,0 +1,10 @@
+cmake_minimum_required(VERSION 3.16)
+get_filename_component(REPO "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+set(EXTRA_COMPONENT_DIRS "${REPO}/src/components/tinyvlm" "${REPO}/managed_components/espressif__esp-tflite-micro" "${REPO}/managed_components/espressif__esp-nn")
+set(COMPONENTS main espressif__esp-nn)
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(aiot_quic)
+# Managed dependency metadata is disabled for this isolated local build.
+idf_component_get_property(tflm espressif__esp-tflite-micro COMPONENT_LIB)
+idf_component_get_property(espnn espressif__esp-nn COMPONENT_LIB)
+target_link_libraries(${tflm} PUBLIC ${espnn})

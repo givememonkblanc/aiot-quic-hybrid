@@ -1,0 +1,6 @@
+# Temporary integration test layout. Preserve NVS/PHY offsets and restore full backup afterwards.
+nvs,data,nvs,0x9000,0x5000,
+phy_init,data,phy,0xe000,0x1000,
+ota_0,app,ota_0,0x10000,0x3e0000,
+otadata,data,ota,0x3f0000,0x2000,
+ota_1,app,ota_1,0x400000,0x3f0000,

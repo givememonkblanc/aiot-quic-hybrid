@@ -1,0 +1,10 @@
+--- a/configuration/config.go
++++ b/configuration/config.go
+@@ -47,6 +47,7 @@
+ 			panic(err.Error())
+ 		}
+ 
++		c.Listeners.MQTT = nil // lab: explicit config replaces default port 1883
+ 		if err = yaml.Unmarshal(data, c); err != nil {
+ 			panic(err.Error())
+ 		}

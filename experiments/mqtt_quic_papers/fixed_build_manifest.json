@@ -1,0 +1,79 @@
+{
+  "author_commit": "8be02fb027bc034ac2c4c14dd4bd5b491a009135",
+  "commands": [
+    [
+      "cc",
+      "-fPIC",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-I",
+      "/home/ryzen395/aiot_quic_baseline/src/components/dl_qads/include",
+      "-c",
+      "/home/ryzen395/aiot_quic_baseline/src/components/dl_qads/video_admission.c",
+      "-o",
+      "/home/ryzen395/aiot_quic_baseline/experiments/mqtt_quic_papers/legacy_build/fixed-0.o"
+    ],
+    [
+      "cc",
+      "-fPIC",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-I",
+      "/home/ryzen395/aiot_quic_baseline/src/components/dl_qads/include",
+      "-c",
+      "/home/ryzen395/aiot_quic_baseline/experiments/mqtt_quic_papers/fixed_replay/admission_bridge.c",
+      "-o",
+      "/home/ryzen395/aiot_quic_baseline/experiments/mqtt_quic_papers/legacy_build/fixed-1.o"
+    ],
+    [
+      "ar",
+      "rcs",
+      "/home/ryzen395/aiot_quic_baseline/experiments/mqtt_quic_papers/legacy_build/libreplay_admission.a",
+      "/home/ryzen395/aiot_quic_baseline/experiments/mqtt_quic_papers/legacy_build/fixed-0.o",
+      "/home/ryzen395/aiot_quic_baseline/experiments/mqtt_quic_papers/legacy_build/fixed-1.o"
+    ],
+    [
+      "cc",
+      "-shared",
+      "/home/ryzen395/aiot_quic_baseline/experiments/mqtt_quic_papers/legacy_build/fixed-0.o",
+      "/home/ryzen395/aiot_quic_baseline/experiments/mqtt_quic_papers/legacy_build/fixed-1.o",
+      "-o",
+      "/home/ryzen395/aiot_quic_baseline/experiments/mqtt_quic_papers/legacy_build/libreplay_admission.so"
+    ],
+    [
+      "cargo",
+      "rustc",
+      "--release",
+      "--locked",
+      "--offline",
+      "--manifest-path",
+      "/home/ryzen395/aiot_quic_baseline/experiments/mqtt_quic_papers/upstream/mqtt-lib-lab/Cargo.toml",
+      "-p",
+      "mqttv5-cli",
+      "--example",
+      "fixed_replay",
+      "-j",
+      "4",
+      "--",
+      "-L",
+      "native=/home/ryzen395/aiot_quic_baseline/experiments/mqtt_quic_papers/legacy_build",
+      "-l",
+      "static=replay_admission"
+    ]
+  ],
+  "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+  "cc": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+  "sha256": {
+    "src/components/dl_qads/video_admission.c": "70794dd19b67c10d6b5b1a2c7cf99ba34e32a5936d0b1bdb5e4cf0448bf17e09",
+    "experiments/mqtt_quic_papers/fixed_replay/admission_bridge.c": "96ce786a981b166a0958086e4404ac295994e8a9b42d754b1a418cede5ffd10a",
+    "src/components/dl_qads/include/video_admission.h": "fff22b65eb768b1e31c191b6d05b9bdc337c1a0befc3735f8c6319b6d85f040d",
+    "experiments/mqtt_quic_papers/fixed_replay/client.rs": "adc1a2879e520e7d2855fa1963dd6af9acf6a8d838fddb3672ddc224d82b3971",
+    "experiments/mqtt_quic_papers/upstream/mqtt-lib-lab/Cargo.lock": "b0bec97f1790cc2cf63342d04933d1554f2591e132c2b2fbf3999656ece2a57e",
+    "experiments/mqtt_quic_papers/legacy_build/fixed-replay": "d93a7edc186db50659eff755269c64e55f83b665acaaf4421a5f43c42a7441aa",
+    "experiments/mqtt_quic_papers/legacy_build/libreplay_admission.so": "d4505610dcaebedd9dc886b7d0de79bf958cecf941b7ab4423d1a682b784039e"
+  }
+}

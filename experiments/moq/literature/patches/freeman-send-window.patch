@@ -1,0 +1,17 @@
+diff --git a/rs/moq-native/src/server.rs b/rs/moq-native/src/server.rs
+index d45e380..2600ac7 100644
+--- a/rs/moq-native/src/server.rs
++++ b/rs/moq-native/src/server.rs
+@@ -107,6 +107,12 @@ impl Server {
+ 		// Enable BBR congestion control
+ 		// TODO Validate the BBR implementation before enabling it
+ 		let mut transport = quinn::TransportConfig::default();
++		// Experiment-only resource budget; timeout/priority algorithms unchanged.
++		if let Ok(value) = std::env::var("LITERATURE_QUIC_SEND_WINDOW") {
++			let bytes = value.parse::<u64>().context("invalid literature send window")?;
++			anyhow::ensure!(bytes > 0 && bytes <= 16777216, "send window out of bounds");
++			transport.send_window(bytes);
++		}
+ 		transport.max_idle_timeout(Some(Duration::from_secs(10).try_into().unwrap()));
+ 		transport.keep_alive_interval(Some(Duration::from_secs(4)));
+ 		//transport.congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default()));

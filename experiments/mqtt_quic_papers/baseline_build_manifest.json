@@ -1,0 +1,55 @@
+{
+  "purpose": "author baseline builds; hardware replication not completed",
+  "repositories": [
+    {
+      "name": "paho",
+      "commit": "9c2f3cd7195ac2ceb07128190410748ff96ea71b"
+    },
+    {
+      "name": "volantmq",
+      "commit": "566a653773fa2c31e80c311b1ad31b186ac095f4"
+    },
+    {
+      "name": "quic-go-fernandez",
+      "commit": "58d073e47682ad976fcf0faa4deade7ce186cf10"
+    },
+    {
+      "name": "mqtt-lib",
+      "commit": "8be02fb027bc034ac2c4c14dd4bd5b491a009135"
+    }
+  ],
+  "binaries": [
+    {
+      "path": "legacy_build/legacy-client",
+      "sha256": "7cb1512d989ee6de0938b3cc405208bce96aa176fc9056a402b08c5bc0c8c44e",
+      "bytes": 14066598
+    },
+    {
+      "path": "legacy_build/volantmq",
+      "sha256": "20172924091935417733d061d27015d8288d8002c6edff6c3807a67b566f6cd1",
+      "bytes": 20462208
+    },
+    {
+      "path": "legacy_build/volantmq-lab",
+      "sha256": "3c8a6abf1826c2dc9c64bc28246ec293b49bee95c8f29d2178b1759bc523d457",
+      "bytes": 20462264
+    },
+    {
+      "path": "legacy_build/mqttv5-author",
+      "sha256": "eb1ceae725c9a9373107eb5226049cacc8c2dca1847d1630e8bf57334d1e8c1d",
+      "bytes": 8247304
+    },
+    {
+      "path": "legacy_build/mqttv5-lab",
+      "sha256": "b3d9754609d59e3d2a4fb4214e6bfcac27bc2a24bd1dea46c53d9f87f9dc6108",
+      "bytes": 8246264
+    }
+  ],
+  "notes": [
+    "Paho library build passes; upstream cmd/sample is syntactically broken and excluded",
+    "Cargo.lock absent upstream; resolved lock archived, not original dependency lock",
+    "Go TLS/client configuration and broker default listener patched in separate lab copies",
+    "Paper scripts include flags not present in pinned CLI; runner uses supported flags",
+    "mqtt-lib-lab measurement patch: generation-window filter and end-to-end subscriber QoS validation"
+  ]
+}

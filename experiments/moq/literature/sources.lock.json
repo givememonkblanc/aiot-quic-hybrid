@@ -1,0 +1,28 @@
+{
+  "sources": [
+    {
+      "name": "public-moq-demo",
+      "url": "https://github.com/streaming-university/public-moq-demo.git",
+      "commit": "2071137a5967e645ab97b6e914dc4f30c8c47d95"
+    },
+    {
+      "name": "moqtail",
+      "url": "https://github.com/moqtail/moqtail.git",
+      "commit": "5711a63936d31af9f644a712c0fef40fcd30c120"
+    },
+    {
+      "name": "freeman-moq",
+      "url": "https://github.com/ac-freeman/moq-rs.git",
+      "commit": "f18fae1f520f074bd61344bbe7ee07530a879e08"
+    },
+    {
+      "name": "moqtail-draft16",
+      "url": "https://github.com/moqtail/moqtail.git",
+      "commit": "c2ff7253479c6a0d7c8282a1cad289d591ebc302"
+    }
+  ],
+  "patches": {
+    "moqtail": "patches/moqtail-loopback.patch",
+    "moqtail-draft16": "patches/moqtail16-loopback.patch"
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "repositories": {
+    "esp-detection": "28de5902a357d99dd9a5db0f52905255641c5a78",
+    "esp-dl": "10128554f7e7176ce3cedb99070bbff696018844",
+    "esp-idf-v5.3.6": "79e3454c68248bd7d881721c9b2e94561378a8ce"
+  },
+  "files": {
+    "vendor/esp-dl/models/cat_detect/models/s3/espdet_pico_224_224_cat.espdl": {
+      "bytes": 498576,
+      "sha256": "604501220b26b8a59f44a835b7d37c31444444a8f5661c5ad9469c61fbcd71e1"
+    },
+    "vendor/esp-dl/examples/cat_detect/main/cat.jpg": {
+      "bytes": 64065,
+      "sha256": "69f89d6052178b9708bb241e0287fc7508cf971c41700414b0358494c648cbce"
+    },
+    "espdet_probe/sdkconfig.defaults": {
+      "bytes": 1649,
+      "sha256": "09d6d9f06b28e607b6823c010243dc727e1872ca5552a4eaa721cfc4d87de07c"
+    },
+    "espdet_probe/main/app_main.cpp": {
+      "bytes": 5149,
+      "sha256": "b221567f22055422c99a2e771c2ef685b23fe3c9e8a0d063eefa03c74946ca7b"
+    },
+    "espdet_probe/CMakeLists.txt": {
+      "bytes": 195,
+      "sha256": "a3112532b9f7903c65df0a298a18756b8eec7b0382f0e10c836850528acb3986"
+    },
+    "espdet_probe/main/CMakeLists.txt": {
+      "bytes": 249,
+      "sha256": "6518a0c3034a566ada603b7e5c327e3246bf2e3ff03c3f186019ca27bef5733b"
+    },
+    "select_model_ops.py": {
+      "bytes": 1636,
+      "sha256": "a1e19926a9cd6b2f6afe08d8ed18272124c702b9bcb298c15b59344822aef0ca"
+    },
+    "build_probe.sh": {
+      "bytes": 288,
+      "sha256": "05929c069fb1d4bc9f04b68e6d26ceb733af89bf1a7ad60ecbddea32029ee089"
+    },
+    "run_probe.py": {
+      "bytes": 3153,
+      "sha256": "32646f5877ea49d97796755ea6720b3437183917a4cc29a98bc74bd1daf09078"
+    }
+  },
+  "probe_binary": {
+    "elf_sha256": "bc456f938bafd5e272c7c6e1853c30cb76ecf01af4d3a2b0e7bc98799f7f7295",
+    "image_sha256": "9cfeed46db79c65442b8990d5d96678abf4ffe5f632253c8ca0614d9dbde5834",
+    "size": 1504496
+  },
+  "operators": {
+    "Add": 5,
+    "Concat": 10,
+    "Conv": 101,
+    "MaxPool": 3,
+    "RequantizeLinear": 6,
+    "Resize": 2,
+    "Split": 3
+  },
+  "runtime": {
+    "esp_dl": "3.3.11",
+    "esp_idf": "5.3.6",
+    "psram_mhz": 40,
+    "cpu_mhz": 240,
+    "input": "RGB888 from 640x480 JPEG",
+    "detector_input": [
+      224,
+      224
+    ],
+    "roi_quality": 80
+  }
+}
