@@ -1,3 +1,5 @@
+> 2026-09-20 비교 조건 점검: 아래 과거 결과는 논문 재현이나 현재 고해상도 카메라 비교 결과가 아니다. TCP에서도 애플리케이션 송신 전에 오래된 데이터를 버리는 admission은 가능하다. OWDV를 절대 AoI로 부르지 않으며, encryption-only 설정만으로 인증 기능·암호 비용이 동일하다고 단정하지 않는다. 같은 MQTT QoS/브로커/인증 조건의 [새 기준선](../experiments/mqtt_quic_papers/README.md)을 별도로 검증했다(현재는 host loopback).
+
 # TCP-MQTT baseline — design
 
 **Why.** Reviewers of QUIC-transport papers (all three, incl. R1/R2/R3 #4)

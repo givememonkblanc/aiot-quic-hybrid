@@ -78,3 +78,50 @@ sdkconfig.prodbuild
 
 # receiver AI-result log (runtime artifact)
 host_receiver/ai_recv.csv
+
+# MP-QUIC mobility raw captures, ephemeral certificates and session tickets
+experiments/mobility/results/
+
+# ESP32 handoff research build
+build_mobility/
+sdkconfig.mobility*
+experiments/handoff/results/
+
+/build_handoff_receiver/
+
+# OTA private TLS keys, device backups and dedicated build
+/experiments/ota/private/
+/experiments/ota/results/
+/build_mobility_ota/
+/sdkconfig.mobility_ota*
+
+/experiments/memory/results/
+/experiments/person_detection/results/
+/experiments/person_detection/out/
+
+# Isolated VLM / ESPDet dependencies and generated builds
+/experiments/vlm_split/vendor/
+/experiments/vlm_split/results/
+/experiments/vlm_split/espdet_probe/build/
+/experiments/vlm_split/espdet_probe/sdkconfig*
+/experiments/vlm_split/espdet_probe/managed_components/
+!/experiments/vlm_split/espdet_probe/sdkconfig.defaults
+/experiments/vlm_split/integrated/
+/experiments/tinyvlm/private/
+/experiments/tinyvlm/person_trial/
+/experiments/tinyvlm/esp32_benchmark/build/
+/experiments/tinyvlm/esp32_benchmark/sdkconfig
+/experiments/tinyvlm/esp32_benchmark/sdkconfig.old
+/experiments/tinyvlm/esp32_benchmark/main/tinyvlm_assets.h
+/experiments/tinyvlm/esp32_benchmark/main/samples.h
+
+# Local camera trace / pre-change snapshots
+/experiments/quic_batch/private/
+/experiments/quic_batch/results/**/feed.jsonl
+
+# Local live-camera profiling artifacts
+/experiments/capture10/results/
+/experiments/capture10/private/
+
+# Generated ESP-IDF MoQ build trees (immutable result archives live separately)
+/build_moq_*/

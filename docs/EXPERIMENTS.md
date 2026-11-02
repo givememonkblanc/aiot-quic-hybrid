@@ -1,5 +1,8 @@
 # Research & Experiments
 
+현재 주 연구는 [MCU–Edge/Cloud VLM 협력 추론](../experiments/vlm_split/README.md)이다.
+[FOMO 정적 설정 비교](../experiments/aiot_resource_management/SWEEP_RESULTS.md)는 기준선으로 보존하며, 아래 핸드오프·hybrid transport 내용은 기존 실험 설명이다.
+
 The `experiments/` tree and the `APP_PRODUCT_MODE 0` firmware build are the
 research side of this repository: the evaluation harness behind the
 MQTT-over-QUIC hybrid-transport standardization work (KICS-level paper,

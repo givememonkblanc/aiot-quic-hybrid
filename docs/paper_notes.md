@@ -1,3 +1,7 @@
+> 2026-09-21 방향 전환: 현재 연구 질문과 계획은 [MCU–Edge/Cloud VLM 협력 추론](../experiments/vlm_split/README.md)을 따른다. 아래 scheduler/transport 기여 주장은 과거 초안이며 현재 논문 기여로 채택하지 않는다.
+
+> 2026-09-20 방법론 점검: 아래 수치는 과거 실험 메모이며 현재 카메라/이동성 펌웨어나 외부 논문의 재현 결과가 아니다. OWDV는 지연 변동량이며 절대 receiver AoI가 아니다. 신뢰성 STREAM과 deadline 폐기 DATAGRAM의 차이도 transport만의 효과로 해석하지 않는다. 현재 문헌·KPI·기준선 검증은 [MQTT/QUIC 재현 조사](../experiments/mqtt_quic_papers/README.md)를 따른다.
+
 # Paper notes — contribution framing, related work, writing checklist
 
 Consolidated from peer-review feedback on a sibling MP-QUIC paper (the same
