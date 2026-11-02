@@ -370,6 +370,17 @@
  * When really desperate or no TLS used, try NO_SESSION_CACHE.  */
 //#define NO_SESSION_CACHE
 
+/* The FreeRTOS defaults map XMALLOC directly to pvPortMalloc, bypassing
+ * wolfSSL_SetAllocators. Route all three operations through our matched hooks
+ * for the opt-in PSRAM transport build. Object-like aliases preserve the
+ * XMALLOC_USER prototypes supplied by wolfcrypt/types.h. */
+#if AIOT_QUIC_PSRAM_POOL
+#define XMALLOC_USER
+#define XMALLOC aiot_wolfssl_malloc
+#define XFREE aiot_wolfssl_free
+#define XREALLOC aiot_wolfssl_realloc
+#endif
+
 /* Small Stack uses more heap. */
 #define WOLFSSL_SMALL_STACK
 
@@ -726,7 +737,12 @@
     /*  #define NO_ESP32_CRYPT                         */
     /*  #define NO_WOLFSSL_ESP32_CRYPT_HASH            */
     /* Note: There's no AES192 HW on the ESP32-S3; falls back to SW */
+    #if !defined(AIOT_ESP32_HW_AES) || !AIOT_ESP32_HW_AES
     #define NO_WOLFSSL_ESP32_CRYPT_AES
+    #else
+    /* Keep GHASH constant-time; avoid 64-bit arithmetic on a 32-bit MCU. */
+    #define GCM_WORD32
+    #endif
     /*  #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI         */
     /*  #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI_MP_MUL  */
     /*  #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI_MULMOD  */

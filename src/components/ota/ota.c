@@ -22,10 +22,18 @@ void ota_confirm_boot(void)
         return;
     }
     esp_ota_img_states_t state;
-    if (esp_ota_get_state_partition(running, &state) != ESP_OK) {
-        return; /* factory / non-OTA partition: nothing to confirm */
+    esp_err_t state_err = esp_ota_get_state_partition(running, &state);
+    if (state_err == ESP_ERR_NOT_FOUND && running->subtype >= ESP_PARTITION_SUBTYPE_APP_OTA_0 &&
+        running->subtype <= ESP_PARTITION_SUBTYPE_APP_OTA_15) {
+        /* Initial USB bootstrap has erased otadata. Record this healthy slot so
+         * the first wireless update has a known-good rollback destination. */
+        if (esp_ota_set_boot_partition(running) == ESP_OK &&
+            esp_ota_mark_app_valid_cancel_rollback() == ESP_OK)
+            ESP_LOGI(TAG, "bootstrap OTA slot recorded valid");
+        return;
     }
-    if (state == ESP_OTA_IMG_PENDING_VERIFY) {
+    if (state_err != ESP_OK) return; /* factory / non-OTA partition */
+    if (state == ESP_OTA_IMG_PENDING_VERIFY || state == ESP_OTA_IMG_UNDEFINED || state == ESP_OTA_IMG_NEW) {
         /* Reaching app_main means the new image booted far enough to run.
          * A stricter product would gate this on end-to-end self-tests. */
         if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {

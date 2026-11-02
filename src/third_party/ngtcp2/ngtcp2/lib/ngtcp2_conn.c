@@ -32,13 +32,13 @@
 #include <esp_log.h>
 #include <esp_task_wdt.h>
 
-#define TEST_FREE_RX_AEAD 0
-#define TEST_FREE_RX_HP 0
-#define TEST_FREE_TX_AEAD 0
-#define TEST_FREE_TX_HP 0
+#define TEST_FREE_RX_AEAD 1
+#define TEST_FREE_RX_HP 1
+#define TEST_FREE_TX_AEAD 1
+#define TEST_FREE_TX_HP 1
 #define TEST_PKTNS_DEL 1
 
-#define TEST_FREE_STEP_1 0
+#define TEST_FREE_STEP_1 1
 #define TEST_FREE_STEP_2 1
 #define TEST_FREE_STEP_3 1
 #define TEST_FREE_STEP_4 1
@@ -82,11 +82,21 @@
 ngtcp2_objalloc_def(strm, ngtcp2_strm, oplent)
 
 #ifdef ESP_PLATFORM
+/* Full heap walks on every received packet distort throughput especially when
+ * the research queue is near full. Keep normal allocator canaries enabled;
+ * reserve the O(number of allocations) sweep for an explicit diagnostic build. */
+static bool ngtcp2_esp_heap_integrity_ok(void) {
+#if defined(AIOT_QUIC_HEAP_DIAGNOSTICS) && AIOT_QUIC_HEAP_DIAGNOSTICS
+  return heap_caps_check_integrity_all(true);
+#else
+  return true;
+#endif
+}
 static void ngtcp2_esp_diag_checkpoint(const char *stage) {
   bool ok;
 
   esp_task_wdt_reset();
-  ok = heap_caps_check_integrity_all(true);
+  ok = ngtcp2_esp_heap_integrity_ok();
   ESP_LOGI("NGTCP2-DISCARD", "%s heap_ok=%d free=%u largest=%u", stage, ok,
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
            (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
@@ -186,7 +196,7 @@ static int conn_call_recv_crypto_data(ngtcp2_conn *conn,
            "1. Before Crypto Feed. level=%d offset=%llu datalen=%zu",
            (int)encryption_level, (unsigned long long)offset, datalen);
   ESP_LOGI("NGTCP2-CRYPTO", "2. Checking heap BEFORE WolfSSL...");
-  heap_caps_check_integrity_all(true);
+  ngtcp2_esp_heap_integrity_ok();
   esp_task_wdt_reset();
 #endif
 
@@ -196,7 +206,7 @@ static int conn_call_recv_crypto_data(ngtcp2_conn *conn,
 #ifdef ESP_PLATFORM
   ESP_LOGI("NGTCP2-CRYPTO", "3. After Crypto Feed. rv=%d", rv);
   ESP_LOGI("NGTCP2-CRYPTO", "4. Checking heap AFTER WolfSSL...");
-  heap_caps_check_integrity_all(true);
+  ngtcp2_esp_heap_integrity_ok();
   esp_task_wdt_reset();
 #endif
 
@@ -1382,7 +1392,7 @@ static int conn_new(ngtcp2_conn **pconn, const ngtcp2_cid *dcid,
 
 #ifdef ESP_PLATFORM
   ESP_LOGI("DEBUG", "EXP-G1: conn base struct allocated. Checking heap...");
-  if (!heap_caps_check_integrity_all(true)) {
+  if (!ngtcp2_esp_heap_integrity_ok()) {
     ESP_LOGE("DEBUG", "PANIC at G1! Heap corrupted BY conn struct allocation! Check custom allocator.");
   }
 #endif
@@ -1492,7 +1502,7 @@ static int conn_new(ngtcp2_conn **pconn, const ngtcp2_cid *dcid,
 
 #ifdef ESP_PLATFORM
   ESP_LOGI("DEBUG", "EXP-G2: Crypto/Callbacks/Settings copied. Checking heap...");
-  if (!heap_caps_check_integrity_all(true)) {
+  if (!ngtcp2_esp_heap_integrity_ok()) {
     ESP_LOGE("DEBUG", "PANIC at G2! Heap corrupted BY internal struct copies!");
   }
 #endif
@@ -1520,7 +1530,7 @@ static int conn_new(ngtcp2_conn **pconn, const ngtcp2_cid *dcid,
 
 #ifdef ESP_PLATFORM
   ESP_LOGI("DEBUG", "EXP-G3: pktns/queues initialized. Checking heap...");
-  if (!heap_caps_check_integrity_all(true)) {
+  if (!ngtcp2_esp_heap_integrity_ok()) {
     ESP_LOGE("DEBUG", "PANIC at G3! Heap corrupted BY pktns or queue init!");
   }
 #endif
@@ -2815,7 +2825,7 @@ void ngtcp2_conn_discard_initial_state(ngtcp2_conn *conn, ngtcp2_tstamp ts) {
 
   /* Heap integrity check (Hypothesis 2) */
   ESP_LOGI("NGTCP2-PRE", "3. Checking heap integrity before call...");
-  heap_caps_check_integrity_all(true);
+  ngtcp2_esp_heap_integrity_ok();
   ESP_LOGI("NGTCP2-PRE", "4. Heap is clean!");
 
   conn_discard_pktns(conn, &conn->in_pktns, ts);
@@ -6708,7 +6718,7 @@ conn_recv_handshake_pkt(ngtcp2_conn *conn, const ngtcp2_path *path,
 
 #ifdef ESP_PLATFORM
   ESP_LOGI("DEBUG", "EXP-D2: Packet Decrypted. Checking heap...");
-  if (!heap_caps_check_integrity_all(true)) {
+  if (!ngtcp2_esp_heap_integrity_ok()) {
     ESP_LOGE("DEBUG", "PANIC at D2! Heap corrupted during Packet Decryption!");
   }
 #endif
@@ -6808,7 +6818,7 @@ conn_recv_handshake_pkt(ngtcp2_conn *conn, const ngtcp2_path *path,
     case NGTCP2_FRAME_CRYPTO:
 #ifdef ESP_PLATFORM
       ESP_LOGI("DEBUG", "EXP-D3: CRYPTO frame detected. Checking heap...");
-      if (!heap_caps_check_integrity_all(true)) {
+      if (!ngtcp2_esp_heap_integrity_ok()) {
         ESP_LOGE("DEBUG",
                  "PANIC at D3! Heap corrupted BEFORE reading CRYPTO frame data!");
       }
@@ -7168,7 +7178,7 @@ static int conn_recv_crypto(ngtcp2_conn *conn,
 
 #ifdef ESP_PLATFORM
     ESP_LOGI("DEBUG", "EXP-D4: CRYPTO data pointers ready. Checking heap...");
-    if (!heap_caps_check_integrity_all(true)) {
+    if (!ngtcp2_esp_heap_integrity_ok()) {
       ESP_LOGE("DEBUG", "PANIC at D4! Heap corrupted during pointer calculation!");
     }
 #endif

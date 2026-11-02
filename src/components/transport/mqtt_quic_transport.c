@@ -1,11 +1,15 @@
 #include "mqtt_quic_transport.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "ngtcp2_sample.h"
 #include "app_config.h"
+#include "../dl_qads/include/mobility_scheduler.h"
 #include <string.h>
 #include <stdlib.h>
 
 static const char *TAG = "MQTT_QUIC";
+
+#define AIOT_ROUTE_QUEUE_INTERNAL_FALLBACK_LIMIT 256U
 
 // Global transport interface
 TransportInterface_t xTransportInterface = {0};
@@ -23,6 +27,50 @@ extern bool quic_client_is_connected(void);
 static void reset_send_buffer(NetworkContext_t *context);
 
 static TaskHandle_t s_network_task;
+/* Reserve the stack before TLS fragments internal DRAM. IDF stack sizes are bytes. */
+static StackType_t s_network_stack[16384 / sizeof(StackType_t)];
+static StaticTask_t s_network_tcb;
+#if AIOT_MOBILITY_CAMERA
+static StaticQueue_t s_route_queue;
+static uint8_t *s_route_storage;
+#endif
+
+static void *route_payload_alloc(NetworkContext_t *ctx, size_t size, uint8_t track)
+{
+#if AIOT_MOBILITY_CAMERA
+    unsigned limit = mobility_video_budget() + (track == AIOT_TRACK_IMAGE ? 0 : 8192);
+    uint32_t used = __atomic_load_n(&ctx->route_payload_bytes, __ATOMIC_RELAXED);
+    do {
+        if (size > limit || used > limit - size) return NULL;
+    } while (!__atomic_compare_exchange_n(&ctx->route_payload_bytes, &used, used + size,
+                                         false, __ATOMIC_RELAXED, __ATOMIC_RELAXED));
+#endif
+    void *payload = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (payload == NULL && size < AIOT_ROUTE_QUEUE_INTERNAL_FALLBACK_LIMIT) {
+        payload = heap_caps_malloc(size, MALLOC_CAP_8BIT);
+    } else if (payload == NULL) {
+        ESP_LOGW(TAG,
+                 "Refusing internal fallback for queued payload size=%zu; preserving internal DRAM for QUIC/TLS",
+                 size);
+    }
+#if AIOT_MOBILITY_CAMERA
+    if (!payload) __atomic_fetch_sub(&ctx->route_payload_bytes, size, __ATOMIC_RELAXED);
+    else if (used + size > ctx->route_payload_peak) ctx->route_payload_peak = used + size;
+#endif
+    return payload;
+}
+
+static void route_payload_free(NetworkContext_t *ctx, void *payload, size_t payload_len) {
+    if (!payload) return;
+    heap_caps_free(payload);
+#if AIOT_MOBILITY_CAMERA
+    __atomic_fetch_sub(&ctx->route_payload_bytes, payload_len + 16, __ATOMIC_RELAXED);
+#endif
+}
+
+#if AIOT_QUIC_BATCH_EXPERIMENT
+#include "quic_batch_queue.inc"
+#endif
 
 static void network_tx_task(void *arg) {
     NetworkContext_t *ctx = (NetworkContext_t *)arg;
@@ -31,12 +79,53 @@ static void network_tx_task(void *arg) {
         vTaskDelete(NULL);
         return;
     }
+#if AIOT_QUIC_BATCH_EXPERIMENT
+    s_batch_messages=heap_caps_calloc(QUIC_BATCH_MAX_FRAGMENTS,sizeof(*s_batch_messages),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    s_batch_fragments=heap_caps_calloc(QUIC_BATCH_MAX_FRAGMENTS,sizeof(*s_batch_fragments),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    if(!s_batch_messages || !s_batch_fragments) {
+        ESP_LOGE(TAG,"Batch reference allocation failed"); vTaskDelete(NULL); return;
+    }
+#endif
     iot_route_msg_t msg;
     uint32_t tx_loop = 0;
+#if AIOT_MOBILITY_CAMERA
+    uint32_t abandoned_frame = 0;
+    bool abandoned_valid = false;
+    int64_t last_tx_yield = esp_timer_get_time();
+#endif
     while (1) {
+#if AIOT_QUIC_BATCH_EXPERIMENT
+        bool received=s_batch_has_pending;
+        if(received) { msg=s_batch_pending; s_batch_has_pending=false; }
+        else received=xQueueReceive(ctx->route_queue,&msg,portMAX_DELAY)==pdTRUE;
+        if (received) {
+#else
         if (xQueueReceive(ctx->route_queue, &msg, portMAX_DELAY) == pdTRUE) {
+#endif
             msg.dequeue_ts_us = esp_timer_get_time();
             msg.send_start_ts_us = msg.dequeue_ts_us;
+#if AIOT_MOBILITY_CAMERA
+            bool image = msg.mode == DELIVERY_UNRELIABLE && msg.track_id == AIOT_TRACK_IMAGE &&
+                         msg.payload_len >= AIOT_OBJECT_HEADER_SIZE;
+            uint32_t frame = image ? ((aiot_object_header_t *)msg.payload)->gen_ts_ms : 0;
+            /* E2: normal allocation, copy, enqueue and worker dequeue; bypass QUIC/socket. */
+            if (image && mobility_profile_get() == 6) {
+#if AIOT_QUIC_BATCH_EXPERIMENT
+                batch_image_busy(false);
+#endif
+                route_payload_free(ctx, msg.payload, msg.payload_len);
+                continue;
+            }
+            /* Switching from the FIFO stress baseline must not leave its old
+             * unbounded-age frames blocking the adaptive policy. */
+            if (image && mobility_mode_get() == 2 && !msg.deadline_us)
+                msg.deadline_us = msg.enqueue_ts_us + 2000000;
+            if (image && abandoned_valid && frame == abandoned_frame) {
+                ctx->datagram_expired++;
+                route_payload_free(ctx, msg.payload, msg.payload_len);
+                continue;
+            }
+#endif
 
             // MOQT delivery-timeout analog: an unreliable object whose deadline
             // passed while queued is stale by definition - shed it here.
@@ -44,28 +133,66 @@ static void network_tx_task(void *arg) {
                 msg.deadline_us != 0 &&
                 msg.dequeue_ts_us > msg.deadline_us) {
                 ctx->datagram_expired++;
+#if AIOT_MOBILITY_CAMERA
+                if (image) { abandoned_frame = frame; abandoned_valid = true;
+#if AIOT_QUIC_BATCH_EXPERIMENT
+                    batch_image_busy(false);
+#endif
+                }
+#endif
                 ESP_LOGW("QUIC_TX", "[EXPIRED] track=%u seq=%lu age_us=%lld deadline_us=%lld depth=%lu",
                          (unsigned)msg.track_id,
                          (unsigned long)msg.object_seq,
                          (long long)(msg.dequeue_ts_us - msg.enqueue_ts_us),
                          (long long)(msg.deadline_us - msg.enqueue_ts_us),
                          (unsigned long)msg.queue_depth_at_enqueue);
-                free(msg.payload);
+                route_payload_free(ctx, msg.payload, msg.payload_len);
                 continue;
             }
 
+#if AIOT_QUIC_BATCH_EXPERIMENT
+            if(image) {
+                int batch_ret=batch_image_send(ctx,&msg,frame);
+                if(batch_ret) { abandoned_frame=frame; abandoned_valid=true; }
+                /* Identical outside-lock burst budget for every grouping. */
+                if(esp_timer_get_time()-last_tx_yield>=APP_NET_TX_BURST_US) {
+                    vTaskDelay(1); last_tx_yield=esp_timer_get_time();
+                }
+                ctx->net_tx_stack_hwm=(uint32_t)uxTaskGetStackHighWaterMark(NULL);
+                continue;
+            }
+#endif
             int ret = -1;
             if (msg.mode == DELIVERY_RELIABLE) {
                 ret = quic_client_write_safe(msg.payload, msg.payload_len);
             } else if (msg.mode == DELIVERY_UNRELIABLE) {
                 ret = quic_client_write_datagram_safe(msg.payload, msg.payload_len,
                                                       (uint64_t)msg.object_seq);
+#if AIOT_MOBILITY_CAMERA
+                /* A camera frame queues several chunks at once. A pacing
+                 * refusal means not accepted, not packet loss: retain this
+                 * chunk briefly instead of corrupting every burst's frame. */
+                int64_t retry_until = esp_timer_get_time() + 100000;
+                if (msg.deadline_us && msg.deadline_us < retry_until)
+                    retry_until = msg.deadline_us;
+                while (ret == -2 && esp_timer_get_time() < retry_until) {
+                    vTaskDelay(1);
+                    if (esp_timer_get_time() >= retry_until) break;
+                    ret = quic_client_write_datagram_safe(msg.payload, msg.payload_len,
+                                                          (uint64_t)msg.object_seq);
+                }
+#endif
             } else {
                 ESP_LOGW(TAG, "Unknown delivery mode: %d", msg.mode);
             }
 
             msg.send_done_ts_us = esp_timer_get_time();
             msg.send_result = ret;
+#if AIOT_MOBILITY_CAMERA
+            /* Once a chunk cannot be sent, its remaining JPEG is unusable.
+             * Shed that frame's tail promptly so AI/control are not blocked. */
+            if (image && ret != 0) { abandoned_frame = frame; abandoned_valid = true; }
+#endif
 
             uint64_t queue_wait_us = (uint64_t)(msg.dequeue_ts_us - msg.enqueue_ts_us);
             uint64_t send_latency_us = (uint64_t)(msg.send_done_ts_us - msg.send_start_ts_us);
@@ -113,10 +240,19 @@ static void network_tx_task(void *arg) {
 
             ESP_LOGD(TAG, "[DATAGRAM_LIFECYCLE] Pre-free check: payload=%p, len=%zu", msg.payload, msg.payload_len);
             if (msg.payload != NULL) {
-                free(msg.payload);
+                route_payload_free(ctx, msg.payload, msg.payload_len);
             }
             ESP_LOGD(TAG, "[DATAGRAM_LIFECYCLE] Post-free check: payload freed successfully");
 
+#if AIOT_MOBILITY_CAMERA
+            /* Bounded bursts avoid an unconditional tick per image fragment.
+             * A successful dequeue after a long idle also yields once; this
+             * deliberately favors watchdog/AI progress over peak throughput. */
+            if (esp_timer_get_time() - last_tx_yield >= APP_NET_TX_BURST_US) {
+                vTaskDelay(1);
+                last_tx_yield = esp_timer_get_time();
+            }
+#endif
             tx_loop++;
             if ((tx_loop % APP_NET_TX_STACK_SAMPLE_INTERVAL) == 0U) {
                 ctx->net_tx_stack_hwm = (uint32_t)uxTaskGetStackHighWaterMark(NULL);
@@ -155,14 +291,24 @@ BaseType_t mqtt_quic_transport_init(NetworkContext_t *pNetworkContext,
     pNetworkContext->net_tx_stack_hwm = 0;
     /* Deep enough to hold a whole streamed JPEG frame (several chunks) plus
      * telemetry without evicting image chunks (which corrupts live frames). */
+#if AIOT_MOBILITY_CAMERA
+    /* Keep the queue control in DRAM and the bounded chunk descriptors in
+     * PSRAM. Accommodate a 256KiB JPEG without consuming scarce internal RAM. */
+    if (!s_route_storage)
+        s_route_storage = heap_caps_malloc(6400 * sizeof(iot_route_msg_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    pNetworkContext->route_queue = s_route_storage ?
+        xQueueCreateStatic(6400, sizeof(iot_route_msg_t), s_route_storage, &s_route_queue) : NULL;
+#else
     pNetworkContext->route_queue = xQueueCreate(48, sizeof(iot_route_msg_t));
+#endif
     if (pNetworkContext->route_queue == NULL) {
         ESP_LOGE(TAG, "Failed to create route queue");
         return pdFAIL;
     }
 
-    if (xTaskCreatePinnedToCore(network_tx_task, "net_tx", 16384,
-                                   pNetworkContext, 5, &s_network_task, 1) != pdPASS) {
+    s_network_task = xTaskCreateStaticPinnedToCore(network_tx_task, "net_tx",
+        sizeof(s_network_stack), pNetworkContext, 5, s_network_stack, &s_network_tcb, 1);
+    if (s_network_task == NULL) {
         ESP_LOGE(TAG, "Failed to create network TX task");
         vQueueDelete(pNetworkContext->route_queue);
         pNetworkContext->route_queue = NULL;
@@ -199,7 +345,7 @@ static bool route_queue_evict_stale_head(NetworkContext_t *ctx)
              (unsigned)head.track_id,
              (unsigned long)head.object_seq,
              (long long)(esp_timer_get_time() - head.enqueue_ts_us));
-    free(head.payload);
+    route_payload_free(ctx, head.payload, head.payload_len);
     return true;
 }
 
@@ -248,7 +394,7 @@ static int send_hybrid_impl(NetworkContext_t *ctx,
     }
 
     size_t safe_len = header_len + payload_len + 16;
-    uint8_t *heap_payload = malloc(safe_len);
+    uint8_t *heap_payload = route_payload_alloc(ctx, safe_len, track_id);
     if (heap_payload == NULL) {
         ESP_LOGW(TAG, "Failed to allocate %zu bytes for queue", safe_len);
         return -1;
@@ -290,7 +436,15 @@ static int send_hybrid_impl(NetworkContext_t *ctx,
         .send_result = -999,
     };
 
-    if (xQueueSend(ctx->route_queue, &msg, 0) != pdPASS) {
+    BaseType_t queued;
+#if AIOT_MOBILITY_CAMERA
+    /* Tiny detection results must not wait behind an entire JPEG burst. */
+    queued = track_id == AIOT_TRACK_AI_RESULT && mobility_mode_get() == 2 ? xQueueSendToFront(ctx->route_queue, &msg, 0) :
+                                              xQueueSend(ctx->route_queue, &msg, 0);
+#else
+    queued = xQueueSend(ctx->route_queue, &msg, 0);
+#endif
+    if (queued != pdPASS) {
         if (route_queue_evict_stale_head(ctx)) {
             if (xQueueSend(ctx->route_queue, &msg, 0) == pdPASS) {
                 return (int)payload_len;
@@ -303,7 +457,7 @@ static int send_hybrid_impl(NetworkContext_t *ctx,
             ctx->stream_send_fail++;
         }
         ESP_LOGW(TAG, "Route queue full, dropping %zu bytes (mode=%d)", payload_len, mode);
-        free(heap_payload);
+        route_payload_free(ctx, heap_payload, header_len + payload_len);
         return -1;
     }
 

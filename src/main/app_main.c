@@ -1,3 +1,5 @@
+#include "netlog.h"
+#include "video_admission.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +20,7 @@ static inline void vTaskDelay(uint32_t ticks)
 #include "../components/common/include/data_packet.h"
 #include "../components/common/include/ai_result.h"
 #include "../components/dl_qads/include/dl_qads.h"
+#include "../components/dl_qads/include/mobility_scheduler.h"
 #include "../components/sources/include/source_manager.h"
 #include "../components/wifi_link/include/wifi_link.h"
 #include "../components/store_forward/include/store_forward.h"
@@ -42,6 +45,9 @@ static inline void vTaskDelay(uint32_t ticks)
 #include "esp_wifi.h"
 #include "esp_app_desc.h"
 #include "driver/gpio.h"
+#endif
+#if AIOT_MOQT_OTA_REMOTE
+#include "ota.h"
 #endif
 
 static const char *TAG = "APP-MAIN";
@@ -1019,27 +1025,82 @@ static void app_send_snapshot(const uint8_t *jpeg, size_t len, uint8_t priority)
  * frame was rate-limited away. All chunks share one gen_ts so the receiver
  * can key the reassembled JPEG by it and join it with the AI result produced
  * from the same capture. */
-static uint32_t app_stream_frame(const uint8_t *jpeg, size_t len, uint8_t priority)
+static uint32_t app_image_reject(const char *reason, size_t len) {
+#if AIOT_MOBILITY_CAMERA
+    if (mobility_profile_get() >= 7) printf("[IMG_GATE] {\"us\":%llu,\"reason\":\"%s\",\"bytes\":%u}\n",
+        (unsigned long long)esp_timer_get_time(),reason,(unsigned)len);
+#endif
+    return 0;
+}
+
+static uint32_t app_stream_frame_at(const uint8_t *jpeg, size_t len, uint8_t priority, uint32_t frame_ts)
 {
     static int64_t last_us;
+#if AIOT_MOBILITY_CAMERA
+    static video_admission_t admission;
+#endif
     if (len < 4) {
-        return 0U;
+        return app_image_reject("invalid_jpeg",len);
     }
     int64_t now = esp_timer_get_time();
     if (last_us != 0 && (now - last_us) < (int64_t)APP_STREAM_INTERVAL_MS * 1000) {
-        return 0U;
+        return app_image_reject("interval",len);
     }
     last_us = now;
-    uint32_t gen_ts_ms = (uint32_t)(now / 1000);
+    uint32_t gen_ts_ms = frame_ts ? frame_ts : (uint32_t)(now / 1000);
+#if AIOT_MOBILITY_CAMERA
+    size_t chunk_count = (len + APP_SNAPSHOT_CHUNK_SIZE - 1) / APP_SNAPSHOT_CHUNK_SIZE;
+    size_t required = len + chunk_count * (AIOT_OBJECT_HEADER_SIZE + 16);
+    uint32_t used = __atomic_load_n(&g_networkContext.route_payload_bytes, __ATOMIC_RELAXED);
+    if (required > mobility_video_budget() || used > mobility_video_budget() - required ||
+        heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) < required + 131072U)
+        return app_image_reject("memory_budget",len);
+    uint32_t video_rtt = 0, video_cwnd = 0, video_inflight = 0;
+    quic_client_get_metrics(&video_rtt, &video_cwnd, &video_inflight);
+    wifi_ap_record_t ap;
+    int video_rssi = esp_wifi_sta_get_ap_info(&ap) == ESP_OK ? ap.rssi : 0;
+    bool video_queue_busy=g_networkContext.route_queue && uxQueueMessagesWaiting(g_networkContext.route_queue);
+#if AIOT_QUIC_BATCH_EXPERIMENT
+    video_queue_busy = video_queue_busy || mqtt_quic_image_inflight();
+#endif
+    if (mobility_mode_get() == 2 && mobility_profile_get() != 6 && mobility_profile_get() != 8 && !video_admission_allow(&admission,
+        video_policy_get(), now, video_rssi, video_rtt, video_cwnd, video_inflight,
+        len, video_queue_busy))
+        return app_image_reject("admission",len);
+
+#endif
+    if (g_networkContext.route_queue && uxQueueSpacesAvailable(g_networkContext.route_queue) <
+        (len + APP_SNAPSHOT_CHUNK_SIZE - 1) / APP_SNAPSHOT_CHUNK_SIZE) return app_image_reject("queue_slots",len);
+#if AIOT_PIPELINE_PROFILE
+    extern uint32_t aiot_task_runtime_now(void);
+    uint32_t fragment_cpu=aiot_task_runtime_now();int64_t fragment_start=esp_timer_get_time();
+#endif
     for (size_t off = 0; off < len; off += APP_SNAPSHOT_CHUNK_SIZE) {
         size_t chunk = (len - off < APP_SNAPSHOT_CHUNK_SIZE) ? (len - off) : APP_SNAPSHOT_CHUNK_SIZE;
         /* Generous deadline so a frame's chunks aren't shed while queued;
          * dropping a chunk corrupts the whole frame at the receiver. */
-        mqtt_quic_transport_send_hybrid_ts(&g_networkContext, DELIVERY_UNRELIABLE,
+        int accepted = mqtt_quic_transport_send_hybrid_ts(&g_networkContext, DELIVERY_UNRELIABLE,
                                            jpeg + off, chunk, AIOT_TRACK_IMAGE,
-                                           priority, 1500U, gen_ts_ms);
+                                           priority,
+#if AIOT_MOBILITY_CAMERA
+                                           mobility_mode_get() == 2 ? 2000U : 0U,
+#else
+                                           1500U,
+#endif
+                                           gen_ts_ms);
+        if (accepted != (int)chunk) return app_image_reject("enqueue_partial",len);
     }
+#if AIOT_PIPELINE_PROFILE
+    printf("[FRAGMENT_PROFILE] {\"gen_ms\":%lu,\"bytes\":%u,\"fragments\":%u,\"cpu_us\":%lu,\"wall_us\":%lld}\n",
+        (unsigned long)gen_ts_ms,(unsigned)len,(unsigned)chunk_count,
+        (unsigned long)(aiot_task_runtime_now()-fragment_cpu),(long long)(esp_timer_get_time()-fragment_start));
+#endif
     return gen_ts_ms;
+}
+
+static uint32_t app_stream_frame(const uint8_t *jpeg, size_t len, uint8_t priority)
+{
+    return app_stream_frame_at(jpeg, len, priority, 0);
 }
 
 /* The inference result for a streamed frame, on the AI track, stamped with
@@ -1389,8 +1450,27 @@ static void app_product_main(void)
 extern void app_tcp_baseline_main(void);   /* src/main/app_tcp_baseline.c */
 #endif
 
+#if AIOT_MOBILITY_RESEARCH
+#include "app_mobility.inc"
+#endif
+
+#if AIOT_MOQT_EXPERIMENT
+#include "app_moq.inc"
+#endif
+
 void app_main(void)
 {
+#ifdef AIOT_NETLOG_HOST
+    if (!netlog_start(AIOT_NETLOG_HOST, AIOT_NETLOG_PORT)) printf("[NETLOG] start failed\n");
+#endif
+#if AIOT_MOQT_EXPERIMENT
+    app_moq_main();
+    return;
+#endif
+#if AIOT_MOBILITY_RESEARCH
+    app_mobility_main();
+    return;
+#endif
 #if APP_TRANSPORT_BACKEND == APP_TRANSPORT_BACKEND_TCP
     app_tcp_baseline_main();   /* non-QUIC baseline */
 #elif APP_PRODUCT_MODE

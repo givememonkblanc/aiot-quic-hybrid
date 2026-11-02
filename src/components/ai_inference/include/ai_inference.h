@@ -12,6 +12,7 @@
 typedef enum {
     AI_INFERENCE_BACKEND_HEURISTIC = 0,
     AI_INFERENCE_BACKEND_TFLM = 1,
+    AI_INFERENCE_BACKEND_ESPDL = 2,
 } ai_inference_backend_t;
 
 typedef struct {
@@ -41,6 +42,22 @@ void ai_inference_init(ai_inference_t *inference);
 void ai_inference_get_capabilities(ai_inference_capabilities_t *capabilities);
 bool ai_inference_run(ai_inference_t *inference,
     const uint8_t *jpeg,
-    uint16_t jpeg_len,
+    uint32_t jpeg_len,
     uint32_t source_sequence,
     aiot_ai_result_t *result);
+
+#ifdef AIOT_ESPDET_RUNTIME
+/* Single worker only: copy the most recent encoded ROI before another inference. */
+size_t ai_inference_copy_roi(uint8_t *dst, size_t capacity);
+#endif
+/* The RGB565 raster of the last decode (result->input_width x input_height), copied with its bytes
+ * swapped to the big-endian order of the JPEG encoder; valid in the task of the inference until its
+ * next run. Returns the bytes copied, 0 when it does not fit. */
+size_t ai_inference_copy_raster(uint8_t *dst, size_t capacity, uint16_t width, uint16_t height);
+size_t ai_inference_decode_raster(const uint8_t *jpeg, uint32_t jpeg_len, uint8_t *dst, size_t capacity,
+    uint16_t *width, uint16_t *height);
+/* The first stage of the inference alone: the JPEG decoded into the detector's raster (as
+ * ai_inference_run decodes it), result->input_width x input_height set; the model is not run, so the
+ * rest of the inference can run elsewhere on ai_inference_copy_raster's copy. */
+bool ai_inference_decode_only(ai_inference_t *inference, const uint8_t *jpeg, uint32_t jpeg_len,
+    uint32_t source_sequence, aiot_ai_result_t *result);

@@ -80,6 +80,8 @@ typedef struct NetworkContext
     uint32_t datagram_send_fail;
     uint32_t datagram_expired;
     uint32_t datagram_evicted;
+    uint32_t route_payload_bytes;
+    uint32_t route_payload_peak;
     uint32_t object_seq_next[4];   // per-track object sequence (index = track_id)
     uint32_t main_stack_hwm;
     uint32_t net_tx_stack_hwm;
@@ -123,3 +125,7 @@ extern TransportInterface_t xTransportInterface;
 uint32_t mqtt_get_time_ms(void);
 
 #endif /* MQTT_QUIC_TRANSPORT_H */
+
+#if AIOT_QUIC_BATCH_EXPERIMENT
+bool mqtt_quic_image_inflight(void);
+#endif

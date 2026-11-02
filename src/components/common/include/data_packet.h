@@ -25,8 +25,8 @@ typedef struct {
     data_type_t type;
     uint32_t sequence;
     uint64_t timestamp_us;
-    uint16_t payload_len;
-    uint16_t total_len;
+    uint32_t payload_len;
+    uint32_t total_len;
     uint8_t priority;
     uint8_t deadline_class;
     bool loss_tolerant;

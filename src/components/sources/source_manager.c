@@ -19,8 +19,44 @@
 #include "ai_result.h"
 #include "esp_log.h"
 #include "esp_camera.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+
+#if AIOT_CAMERA_INTEGRITY_TEST
+#include "mbedtls/sha256.h"
+static uint32_t camera_set_errors;
+static unsigned camera_set_index;
+static int camera_regs[10];
+static char camera_diagnostic[640];
+static size_t camera_diagnostic_len;
+#define CAMERA_SET(expr) do { if ((expr) != 0) camera_set_errors |= 1U << camera_set_index; camera_set_index++; } while (0)
+size_t source_manager_camera_diagnostic(char *out, size_t capacity)
+{
+    if (!camera_diagnostic_len || capacity <= camera_diagnostic_len) return 0;
+    memcpy(out, camera_diagnostic, camera_diagnostic_len + 1);
+    return camera_diagnostic_len;
+}
+#else
+#define CAMERA_SET(expr) ((void)(expr))
+#endif
 
 static const char *TAG = "source_manager";
+
+static void source_manager_log_heap_state(const char *stage)
+{
+#if AIOT_SOURCE_HAS_ESP_TIMER
+    ESP_LOGI(TAG,
+        "%s: internal_free=%u internal_largest=%u spiram_free=%u spiram_largest=%u",
+        stage,
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+        (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+        (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+#else
+    (void)stage;
+#endif
+}
 
 static uint64_t source_manager_now_us(void)
 {
@@ -34,7 +70,11 @@ static uint64_t source_manager_now_us(void)
 }
 
 #if CONFIG_IDF_TARGET_ESP32S3
-#define CAMERA_PIN_PWDN 38
+/* ESP32-S3-EYE camera PWDN is pulled low on the board, not GPIO-driven.
+ * GPIO38 belongs to the microSD CMD signal. Other S3 boards may override. */
+#ifndef CAMERA_PIN_PWDN
+#define CAMERA_PIN_PWDN -1
+#endif
 #define CAMERA_PIN_RESET -1
 #define CAMERA_PIN_XCLK 15
 #define CAMERA_PIN_SIOD 4
@@ -86,19 +126,46 @@ static camera_config_t camera_config = {
     .pin_vsync = CAMERA_PIN_VSYNC,
     .pin_href = CAMERA_PIN_HREF,
     .pin_pclk = CAMERA_PIN_PCLK,
+#if defined(AIOT_CAMERA_XCLK_HZ)
+    .xclk_freq_hz = AIOT_CAMERA_XCLK_HZ,
+#else
     .xclk_freq_hz = 20000000,
+#endif
     .ledc_timer = LEDC_TIMER_0,
     .ledc_channel = LEDC_CHANNEL_0,
     .pixel_format = PIXFORMAT_JPEG,
-    .frame_size = FRAMESIZE_QQVGA,   /* 160x120: small JPEG fits the 8KB buffers
-                                        and a few stream chunks; reliable live view */
+#if AIOT_MOBILITY_CAMERA
+#if AIOT_CAMERA_SVGA_TEST
+    .frame_size = FRAMESIZE_SVGA,
+#elif AIOT_CAMERA_UXGA
+    .frame_size = FRAMESIZE_UXGA,
+#else
+    .frame_size = FRAMESIZE_SXGA,    /* Allocate room before OV2640 native 1024-square window. */
+#endif
+#else
+    .frame_size = FRAMESIZE_QQVGA,
+#endif
+#if AIOT_MOBILITY_CAMERA
+#if defined(AIOT_CAMERA_JPEG_QUALITY)
+    .jpeg_quality = AIOT_CAMERA_JPEG_QUALITY,
+#elif AIOT_CAMERA_UXGA
+    .jpeg_quality = 6,  /* Preserve fine detail for remote screw inspection. */
+#else
+    .jpeg_quality = 10,
+#endif
+#else
     .jpeg_quality = 12,
+#endif
     .fb_count = 1,
     .fb_location = CAMERA_FB_IN_DRAM,
     .grab_mode = CAMERA_GRAB_WHEN_EMPTY,
 };
 
 static bool g_camera_initialized = false;
+#if AIOT_CAMERA_DIAG
+static unsigned diag_good, diag_bad, diag_max;
+#endif
+bool source_manager_camera_ready(void) { return g_camera_initialized; }
 static ai_inference_t g_inference;
 
 static const uint8_t test_jpeg[] = {
@@ -134,7 +201,40 @@ static const uint8_t test_jpeg[] = {
 };
 
 static int test_jpeg_len = sizeof(test_jpeg);
-static uint8_t g_image_buffer[8192];
+#if AIOT_MOBILITY_CAMERA
+#define SOURCE_IMAGE_CAPACITY 262144U
+static uint8_t *g_image_buffer;
+#else
+#define SOURCE_IMAGE_CAPACITY 8192U
+static uint8_t g_image_buffer[SOURCE_IMAGE_CAPACITY];
+#endif
+
+#if AIOT_MOBILITY_CAMERA && defined(AIOT_CAMERA_BYTE_BUDGET)
+/* Frame bytes held to a budget, as Vigil (MobiCom 2015) holds the uploads of an epoch to the estimated
+ * capacity: in the dark the sensor gain raises noise, noise raises the JPEG bytes (10/10: 72 KB in the
+ * day, 240-310 KB at night, over the 256 KB buffer, so nearly every frame was dropped). The OV2640
+ * quantizer steps coarser while a frame is over the budget and back finer while it is well under, never
+ * finer than the configured quality: in the day the camera is unchanged. A new quality applies a frame
+ * or two later, so the step waits two frames. */
+static int camera_quality, camera_quality_min;
+static void camera_budget(size_t len)
+{
+    static unsigned wait;
+    const size_t b = AIOT_CAMERA_BYTE_BUDGET;
+    if (wait) { wait--; return; }
+    int q = camera_quality;
+    if (len > b * 11 / 10) q += len > 2 * b ? 4 : len > b * 3 / 2 ? 2 : 1;
+    else if (len < b * 8 / 10) q--;
+    if (q < camera_quality_min) q = camera_quality_min;
+    if (q > 63) q = 63;
+    if (q == camera_quality) return;
+    sensor_t *s = esp_camera_sensor_get();
+    if (!s || s->set_quality(s, q) != 0) return;
+    printf("[CAM_BUDGET] {\"bytes\":%u,\"quality\":%d,\"was\":%d}\n", (unsigned)len, q, camera_quality);
+    camera_quality = q;
+    wait = 2;
+}
+#endif
 
 static void source_manager_store_ai_result(source_manager_t *manager,
     const aiot_ai_result_t *result)
@@ -172,7 +272,7 @@ static void source_manager_set_empty_ai_result(source_manager_t *manager, uint32
 
 static void source_manager_run_inference(source_manager_t *manager,
     const uint8_t *jpeg,
-    uint16_t jpeg_len,
+    uint32_t jpeg_len,
     uint32_t source_sequence)
 {
     aiot_ai_result_t result;
@@ -191,11 +291,16 @@ static void source_manager_run_inference(source_manager_t *manager,
     }
 
     uint64_t t0 = source_manager_now_us();
-    bool has_detection = ai_inference_run(&g_inference,
-        jpeg,
-        jpeg_len,
-        source_sequence,
-        &result);
+    bool has_detection = false;
+    /* AIOT_AI_REPEAT > 1 stands for a slower model with the same accuracy: the result is that
+     * of the last run, the time and the core are taken k times */
+    for (unsigned run = 0; run < AIOT_AI_REPEAT; run++) {
+        has_detection = ai_inference_run(&g_inference,
+            jpeg,
+            jpeg_len,
+            source_sequence,
+            &result);
+    }
     manager->last_inference_us = (uint32_t)(source_manager_now_us() - t0);
     manager->last_ran = has_detection;
 
@@ -210,11 +315,60 @@ static void source_manager_run_inference(source_manager_t *manager,
     source_manager_store_ai_result(manager, &result);
 }
 
+#if AIOT_MOBILITY_CAMERA
+#include "source_async.inc"
+#if AIOT_EMBED_REPLAY_JPEG
+extern const uint8_t replay_jpeg_start[] asm("_binary_replay_jpeg_start");
+extern const uint8_t replay_jpeg_end[] asm("_binary_replay_jpeg_end");
+#endif
+bool source_manager_replay_next(data_packet_t *packet)
+{
+#if AIOT_EMBED_REPLAY_JPEG
+    static uint8_t *fixed;
+    static unsigned epoch;
+    static uint64_t origin;
+    static uint32_t last_slot = UINT32_MAX;
+    unsigned requested = mobility_replay_epoch();
+    if (!requested) return false;
+    size_t len = replay_jpeg_end-replay_jpeg_start;
+    if (!fixed) {
+        fixed = heap_caps_malloc(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!fixed) return false;
+        memcpy(fixed,replay_jpeg_start,len);
+    }
+    uint64_t now = source_manager_now_us();
+    if (epoch != requested) { epoch=requested;origin=now;last_slot=UINT32_MAX; }
+    uint32_t slot=(uint32_t)((now-origin)/100000);
+    if (slot == last_slot) return false;
+    uint32_t missed=last_slot==UINT32_MAX ? slot : slot-last_slot-1;
+    last_slot=slot;
+    *packet=(data_packet_t){.type=DATA_TYPE_IMAGE,.sequence=(epoch<<20)|slot,
+        .timestamp_us=origin+(uint64_t)slot*100000,.payload=fixed,.payload_len=len,.priority=1};
+    moq_audit_printf("[REPLAY] {\"epoch\":%u,\"slot\":%lu,\"seq\":%lu,\"scheduled_us\":%llu,\"actual_us\":%llu,\"missed\":%lu}\n",
+        epoch,(unsigned long)slot,(unsigned long)packet->sequence,(unsigned long long)packet->timestamp_us,
+        (unsigned long long)now,(unsigned long)missed);
+    return true;
+#else
+    (void)packet;
+    return false;
+#endif
+}
+
+#endif
+
 void source_manager_init(source_manager_t *manager)
 {
     ai_inference_capabilities_t capabilities;
 
     memset(manager, 0, sizeof(*manager));
+#if AIOT_MOBILITY_CAMERA
+    if (!g_image_buffer)
+        g_image_buffer = heap_caps_malloc(SOURCE_IMAGE_CAPACITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!g_image_buffer) {
+        ESP_LOGE(TAG, "Camera JPEG buffer allocation failed");
+        return;
+    }
+#endif
     ai_inference_init(&g_inference);
     ai_inference_get_capabilities(&capabilities);
     source_manager_set_empty_ai_result(manager, 0U);
@@ -228,6 +382,10 @@ void source_manager_init(source_manager_t *manager)
     if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0U) {
         camera_config.fb_location = CAMERA_FB_IN_PSRAM;
         camera_config.fb_count = 1;
+#if AIOT_MOBILITY_CAMERA
+        camera_config.fb_count = 2;
+        camera_config.grab_mode = CAMERA_GRAB_LATEST;
+#endif
     } else {
         camera_config.fb_location = CAMERA_FB_IN_DRAM;
         camera_config.fb_count = 1;
@@ -243,48 +401,122 @@ void source_manager_init(source_manager_t *manager)
         camera_config.fb_location == CAMERA_FB_IN_PSRAM ? "psram" : "dram",
         (unsigned)camera_config.fb_count);
 
+    source_manager_log_heap_state("camera:init before esp_camera_init");
+
     esp_err_t err = esp_camera_init(&camera_config);
+#if AIOT_MOBILITY_CAMERA && defined(AIOT_CAMERA_BYTE_BUDGET)
+    camera_quality = camera_quality_min = camera_config.jpeg_quality;
+#endif
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Camera init failed with error 0x%x", err);
         g_camera_initialized = false;
         return;
     }
 
+    source_manager_log_heap_state("camera:init after esp_camera_init");
+
     g_camera_initialized = true;
 
     sensor_t *s = esp_camera_sensor_get();
+#if AIOT_CAMERA_INTEGRITY_TEST
+    camera_set_errors = 0;
+    camera_set_index = 0;
+#endif
+#if !AIOT_CAMERA_DEFAULTS_TEST
     if (s != NULL) {
-        s->set_brightness(s, 0);
-        s->set_contrast(s, 0);
-        s->set_saturation(s, 0);
-        s->set_whitebal(s, 1);
-        s->set_awb_gain(s, 1);
-        s->set_wb_mode(s, 0);
-        s->set_exposure_ctrl(s, 1);
-        /* Indoor scenes were coming out too dark for the person classifier:
-         * AEC2 (DSP night mode) lets exposure stretch under low light, and a
-         * 16x AGC ceiling (up from 2x) lets gain follow. */
-        s->set_aec2(s, 1);
-        s->set_ae_level(s, 0);
-        s->set_aec_value(s, 300);
-        s->set_gain_ctrl(s, 1);
-        s->set_agc_gain(s, 0);
-        s->set_gainceiling(s, (gainceiling_t)3);
-        s->set_bpc(s, 0);
-        s->set_wpc(s, 1);
-        s->set_raw_gma(s, 1);
-        s->set_lenc(s, 1);
-        s->set_hmirror(s, 0);
-        s->set_vflip(s, 0);
-        s->set_dcw(s, 1);
-        s->set_colorbar(s, 0);
+        CAMERA_SET(s->set_brightness(s, 0));
+        CAMERA_SET(s->set_contrast(s, 0));
+        CAMERA_SET(s->set_saturation(s, 0));
+        CAMERA_SET(s->set_whitebal(s, 1));
+        CAMERA_SET(s->set_awb_gain(s, 1));
+        CAMERA_SET(s->set_wb_mode(s, 0));
+        CAMERA_SET(s->set_exposure_ctrl(s, 1));
+        /* AEC2 controls DSP automatic exposure, not the sensor night-mode bit.
+         * Keep automatic gain capped at 16x for the indoor scene. */
+        CAMERA_SET(s->set_aec2(s, 1));
+        CAMERA_SET(s->set_ae_level(s, 0));
+        CAMERA_SET(s->set_aec_value(s, 300));
+        CAMERA_SET(s->set_gain_ctrl(s, 1));
+        CAMERA_SET(s->set_agc_gain(s, 0));
+        CAMERA_SET(s->set_gainceiling(s, (gainceiling_t)3));
+        CAMERA_SET(s->set_bpc(s, 0));
+        CAMERA_SET(s->set_wpc(s, 1));
+        CAMERA_SET(s->set_raw_gma(s, 1));
+        CAMERA_SET(s->set_lenc(s, 1));
+        CAMERA_SET(s->set_hmirror(s, 0));
+        CAMERA_SET(s->set_vflip(s, 0));
+        CAMERA_SET(s->set_dcw(s, 1));
+        CAMERA_SET(s->set_colorbar(s, 0));
+#if AIOT_CAMERA_EXPOSURE_TEST
+        /* Register units, not milliseconds. Disable both automatic exposure
+         * controllers; leave automatic gain enabled for this diagnostic. */
+        if (s->set_aec2(s, 0) != 0 || s->set_exposure_ctrl(s, 0) != 0 ||
+            s->set_aec_value(s, 120) != 0) {
+            ESP_LOGE(TAG, "Fixed-exposure diagnostic setup failed");
+            g_camera_initialized = false;
+            return;
+        }
+#endif
     }
 
+#endif /* application sensor tuning */
+
+#if AIOT_MOBILITY_CAMERA
+    if (!s || s->id.PID != OV2640_PID ||
+#if AIOT_CAMERA_SVGA_TEST
+        s->set_framesize(s, FRAMESIZE_SVGA) != 0 ||
+#elif AIOT_CAMERA_QVGA
+        s->set_framesize(s, FRAMESIZE_QVGA) != 0 ||   /* the full field of view at 320x240 */
+#elif AIOT_CAMERA_UXGA
+        s->set_framesize(s, FRAMESIZE_UXGA) != 0 ||
+#else
+        s->set_res_raw(s, 0, 0, 0, 0, 200, 0, 1200, 1200, 1024, 1024, true, false) != 0 ||
+#endif
+        !source_ai_start(manager)) {
+        ESP_LOGE(TAG, "Camera resolution / asynchronous AI initialization failed");
+        g_camera_initialized = false;
+        return;
+    }
+#endif
+#if AIOT_CAMERA_COLORBAR_TEST
+    /* Apply after the final frame-size call because OV2640 set_window writes
+     * COM7, which also contains the color-bar enable bit. */
+    if (s->set_colorbar(s, 1) != 0) {
+        ESP_LOGE(TAG, "OV2640 color-bar diagnostic setup failed");
+        g_camera_initialized = false;
+        return;
+    }
+#endif
+#if AIOT_CAMERA_INTEGRITY_TEST
+    /* Driver get_reg uses bit 8 for sensor bank. Read once after configuration,
+     * before the application starts consuming frames; no per-frame SCCB I/O. */
+    const int addresses[] = {0x112, 0x05a, 0x05b, 0x05c, 0x0c0,
+                             0x0c1, 0x044, 0x0da, 0x050, 0x08c};
+    for (unsigned i = 0; i < 10; i++) camera_regs[i] = s->get_reg(s, addresses[i], 0xff);
+#endif
+#if AIOT_CAMERA_DIAG
+    /* Identification of the sensor and a small frame size, to separate the sensor from the
+     * transfer of large frames. */
+    printf("[CAM_ID] {\"pid\":%u,\"ver\":%u,\"midh\":%u,\"midl\":%u,\"reg_0a\":%d,\"reg_0b\":%d,\"reg_1c\":%d,\"reg_1d\":%d}\n",
+           (unsigned)s->id.PID, (unsigned)s->id.VER, (unsigned)s->id.MIDH, (unsigned)s->id.MIDL,
+           s->get_reg(s, 0x10a, 0xff), s->get_reg(s, 0x10b, 0xff), s->get_reg(s, 0x11c, 0xff), s->get_reg(s, 0x11d, 0xff));
+    printf("[CAM_DIAG] framesize=QVGA result=%d\n", s->set_framesize(s, FRAMESIZE_QVGA));
+#endif
     ESP_LOGI(TAG, "Camera initialized successfully");
 }
 
+#if AIOT_PIPELINE_PROFILE
+extern uint32_t aiot_task_runtime_now(void);
+extern uint64_t camera_profile_ready_us(const camera_fb_t *fb);
+#endif
 bool source_manager_next_packet(source_manager_t *manager, data_packet_t *packet)
 {
+#if AIOT_MOBILITY_CAMERA
+    if (!g_image_buffer) return false;
+#endif
+#if AIOT_CAMERA_INTEGRITY_TEST
+    camera_diagnostic_len = 0;
+#endif
     memset(packet, 0, sizeof(*packet));
     packet->sequence = manager->next_sequence++;
     packet->timestamp_us = source_manager_now_us();
@@ -301,25 +533,106 @@ bool source_manager_next_packet(source_manager_t *manager, data_packet_t *packet
             return true;
 
         default: {
-            size_t jpeg_len = g_camera_initialized ? 0 : test_jpeg_len;
+            manager->last_frame_real = false;
+            size_t jpeg_len = 0;
 
             if (g_camera_initialized) {
+#if AIOT_PIPELINE_PROFILE
+                int64_t get_start=esp_timer_get_time();uint32_t get_cpu=aiot_task_runtime_now();
+#endif
+#if AIOT_CAMERA_DIAG
+                {
+                    /* every 8 s the next frame size; a summary of the stage that ended */
+                    static const framesize_t sizes[] = {FRAMESIZE_QVGA, FRAMESIZE_VGA, FRAMESIZE_SVGA, FRAMESIZE_XGA,
+                                                        FRAMESIZE_HD, FRAMESIZE_SXGA, FRAMESIZE_UXGA};
+                    static const char *names[] = {"QVGA", "VGA", "SVGA", "XGA", "HD", "SXGA", "UXGA"};
+                    static int stage = -1;
+                    static int64_t since;
+                    int64_t now = esp_timer_get_time();
+                    if (stage < 6 && (stage < 0 || now - since > 8000000)) {
+                        if (stage >= 0)
+                            printf("[CAM_STAGE] {\"size\":\"%s\",\"good\":%u,\"bad\":%u,\"bytes_max\":%u}\n",
+                                   names[stage], diag_good, diag_bad, diag_max);
+                        stage++;
+                        diag_good = diag_bad = diag_max = 0;
+                        sensor_t *ds = esp_camera_sensor_get();
+                        int rc = ds ? ds->set_framesize(ds, sizes[stage]) : -1;
+                        printf("[CAM_DIAG] framesize=%s result=%d\n", names[stage], rc);
+                        for (int i = 0; i < 2; i++) { camera_fb_t *old = esp_camera_fb_get(); if (old) esp_camera_fb_return(old); }
+                        since = esp_timer_get_time();
+                    }
+                }
+#endif
                 camera_fb_t *fb = esp_camera_fb_get();
+#if AIOT_PIPELINE_PROFILE
+                int64_t get_done=esp_timer_get_time();get_cpu=aiot_task_runtime_now()-get_cpu;
+                uint64_t sensor_start=fb ? (uint64_t)fb->timestamp.tv_sec*1000000+fb->timestamp.tv_usec : 0;
+                uint64_t ready=fb ? camera_profile_ready_us(fb) : 0;
+                uint32_t copy_cpu=aiot_task_runtime_now();int64_t copy_start=esp_timer_get_time();
+#endif
                 if (fb != NULL) {
                     jpeg_len = fb->len;
+#if AIOT_MOBILITY_CAMERA && defined(AIOT_CAMERA_BYTE_BUDGET)
+                    camera_budget(jpeg_len);
+#endif
                     ESP_LOGD(TAG, "Camera frame: len=%zu first=0x%02x 0x%02x",
                               jpeg_len,
                               (unsigned)(jpeg_len > 0 ? fb->buf[0] : 0),
                               (unsigned)(jpeg_len > 1 ? fb->buf[1] : 0));
-                    if (jpeg_len > 0 && jpeg_len <= sizeof(g_image_buffer) &&
+                    if (jpeg_len >= 4 && jpeg_len <= SOURCE_IMAGE_CAPACITY &&
                         fb->buf[0] == 0xFF && fb->buf[1] == 0xD8) {
+#if AIOT_CAMERA_INTEGRITY_TEST
+                        static unsigned diagnostic_frame;
+                        bool sample = (++diagnostic_frame % 10U) == 1U;
+                        uint8_t source_sha[32], copy_sha[32];
+                        int hash_rc = 0;
+                        int64_t hash_start = esp_timer_get_time();
+                        if (sample) hash_rc = mbedtls_sha256(fb->buf, jpeg_len, source_sha, 0);
+#endif
                         memcpy(g_image_buffer, fb->buf, jpeg_len);
+#if AIOT_CAMERA_INTEGRITY_TEST
+                        if (sample) {
+                            hash_rc |= mbedtls_sha256(g_image_buffer, jpeg_len, copy_sha, 0);
+                            if (!hash_rc) {
+                                char hex[65];
+                                for (unsigned i=0;i<32;i++) snprintf(hex+2*i,3,"%02x",source_sha[i]);
+                                int n = snprintf(camera_diagnostic, sizeof(camera_diagnostic),
+                                    "{\"kind\":\"camera_integrity\",\"ts\":%lu,\"bytes\":%u,\"w\":%u,\"h\":%u,\"sha256\":\"%s\",\"copy_equal\":%s,\"probe_us\":%lld,\"set_errors\":%lu,\"regs\":[%d,%d,%d,%d,%d,%d,%d,%d,%d,%d]}",
+                                    (unsigned long)(packet->timestamp_us/1000),(unsigned)jpeg_len,
+                                    (unsigned)fb->width,(unsigned)fb->height,hex,
+                                    memcmp(source_sha,copy_sha,32)==0?"true":"false",
+                                    (long long)(esp_timer_get_time()-hash_start),(unsigned long)camera_set_errors,
+                                    camera_regs[0],camera_regs[1],camera_regs[2],camera_regs[3],camera_regs[4],
+                                    camera_regs[5],camera_regs[6],camera_regs[7],camera_regs[8],camera_regs[9]);
+                                if (n>0 && n<sizeof(camera_diagnostic)) camera_diagnostic_len=n;
+                            }
+                        }
+#endif
+                        manager->last_frame_real = true;
+#if AIOT_CAMERA_DIAG
+                        diag_good++;
+                        if (jpeg_len > diag_max) diag_max = (unsigned)jpeg_len;
+#endif
                     } else {
+#if AIOT_CAMERA_DIAG
+                        diag_bad++;
+#endif
                         ESP_LOGW(TAG, "Invalid camera frame: len=%zu, using test JPEG", jpeg_len);
                         jpeg_len = 0;
                     }
+#if AIOT_PIPELINE_PROFILE
+                    copy_cpu=aiot_task_runtime_now()-copy_cpu;
+                    int64_t copy_done=esp_timer_get_time();
+                    printf("[CAPTURE_PROFILE] {\"seq\":%lu,\"start_us\":%llu,\"ready_us\":%llu,\"get_start_us\":%lld,\"get_done_us\":%lld,\"copy_done_us\":%lld,\"get_cpu_us\":%lu,\"copy_cpu_us\":%lu,\"copy_wall_us\":%lld,\"bytes\":%u,\"valid\":%d}\n",
+                        (unsigned long)packet->sequence,(unsigned long long)sensor_start,(unsigned long long)ready,
+                        (long long)get_start,(long long)get_done,(long long)copy_done,(unsigned long)get_cpu,
+                        (unsigned long)copy_cpu,(long long)(copy_done-copy_start),(unsigned)jpeg_len,manager->last_frame_real);
+#endif
                     esp_camera_fb_return(fb);
                 } else {
+#if AIOT_CAMERA_DIAG
+                    diag_bad++;
+#endif
                     ESP_LOGW(TAG, "Camera fb is NULL, using test JPEG");
                     jpeg_len = 0;
                 }
@@ -333,7 +646,11 @@ bool source_manager_next_packet(source_manager_t *manager, data_packet_t *packet
                 ESP_LOGD(TAG, "Using test JPEG: len=%d", jpeg_len);
             }
 
-            source_manager_run_inference(manager, g_image_buffer, (uint16_t)jpeg_len, packet->sequence);
+#if AIOT_MOBILITY_CAMERA
+            packet->timestamp_us = source_manager_now_us();
+#else
+            source_manager_run_inference(manager, g_image_buffer, (uint32_t)jpeg_len, packet->sequence);
+#endif
 
             packet->type = DATA_TYPE_IMAGE;
             packet->priority = 1;

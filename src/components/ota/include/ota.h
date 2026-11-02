@@ -24,3 +24,18 @@ void ota_confirm_boot(void);
  * esp_err_t describing what went wrong; the current image keeps running.
  */
 esp_err_t ota_run_from_url(const char *url);
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+/* Optional pinned HTTPS pull service. Returns false if disabled/no update/error. */
+bool ota_pull_enabled(void);
+bool ota_pull_check(char target_elf_sha256[65]);
+esp_err_t ota_pull_install(const char *target_elf_sha256);
+bool ota_boot_pending(void);
+/* An image that is still pending verification is marked invalid and the device restarts into the
+ * previous image; returns only when the running image is confirmed. */
+void ota_rollback_if_pending(void);
+void ota_log_status(void);
+/* Main-task snapshot for remote boot diagnostics; no image or detection data. */
+void ota_set_local_health(bool camera_ready, uint32_t frames, uint32_t inference_us, int backend);

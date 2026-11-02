@@ -1,3 +1,6 @@
+#ifndef AIOT_AI_ROI
+#define AIOT_AI_ROI 0
+#endif
 #include "ai_inference_tflm.h"
 
 #include <new>
@@ -28,6 +31,8 @@
 
 static const char *TAG = "ai_tflm";
 
+#define AIOT_TENSOR_ARENA_INTERNAL_FALLBACK_LIMIT (256U * 1024U)
+
 #if AIOT_TFLM_AVAILABLE
 namespace {
 
@@ -42,6 +47,17 @@ struct TflmContext {
 };
 
 TflmContext g_tflm;
+
+static void log_heap_state(const char *stage)
+{
+    ESP_LOGI(TAG,
+        "%s: internal_free=%u internal_largest=%u spiram_free=%u spiram_largest=%u",
+        stage,
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+        (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+        (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+}
 
 static bool add_resolver_op(TfLiteStatus status, const char *name)
 {
@@ -58,7 +74,16 @@ static bool configure_resolver(TflmContext *ctx)
         return false;
     }
 
-    return add_resolver_op(ctx->resolver.AddMul(), "MUL") &&
+#if AIOT_MODEL_COMPRESSED
+    // Generated from this exact model's operator table, not a guessed op list.
+#include "ai_model_register_ops.inc"
+    return true;
+#else
+    return add_resolver_op(ctx->resolver.AddAdd(), "ADD") &&
+        add_resolver_op(ctx->resolver.AddPad(), "PAD") &&
+        add_resolver_op(ctx->resolver.AddMean(), "MEAN") &&
+        add_resolver_op(ctx->resolver.AddFullyConnected(), "FULLY_CONNECTED") &&
+        add_resolver_op(ctx->resolver.AddMul(), "MUL") &&
         add_resolver_op(ctx->resolver.AddMinimum(), "MINIMUM") &&
         add_resolver_op(ctx->resolver.AddRelu(), "RELU") &&
         add_resolver_op(ctx->resolver.AddAveragePool2D(), "AVERAGE_POOL_2D") &&
@@ -68,6 +93,7 @@ static bool configure_resolver(TflmContext *ctx)
         add_resolver_op(ctx->resolver.AddSoftmax(), "SOFTMAX") &&
         add_resolver_op(ctx->resolver.AddSub(), "SUB") &&
         add_resolver_op(ctx->resolver.AddConcatenation(), "CONCATENATION");
+#endif
 }
 
 static void reset_context(void)
@@ -123,6 +149,7 @@ static bool setup_context(const ai_inference_model_asset_t *model_asset)
     }
 
     reset_context();
+    log_heap_state("tflm:after reset_context");
 
     if (!configure_resolver(&g_tflm)) {
         reset_context();
@@ -147,10 +174,17 @@ static bool setup_context(const ai_inference_model_asset_t *model_asset)
     g_tflm.tensor_arena = static_cast<uint8_t *>(heap_caps_malloc(
         g_tflm.tensor_arena_size,
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (g_tflm.tensor_arena == NULL) {
+    log_heap_state("tflm:after psram arena alloc");
+    if (g_tflm.tensor_arena == NULL &&
+        g_tflm.tensor_arena_size < AIOT_TENSOR_ARENA_INTERNAL_FALLBACK_LIMIT) {
         g_tflm.tensor_arena = static_cast<uint8_t *>(heap_caps_malloc(
             g_tflm.tensor_arena_size,
             MALLOC_CAP_8BIT));
+        log_heap_state("tflm:after internal arena fallback");
+    } else if (g_tflm.tensor_arena == NULL) {
+        ESP_LOGW(TAG,
+            "Refusing internal fallback for large tensor arena size=%lu; keeping internal DRAM for transport/TLS",
+            static_cast<unsigned long>(g_tflm.tensor_arena_size));
     }
     if (g_tflm.tensor_arena == NULL) {
         ESP_LOGE(TAG, "Tensor arena allocation failed size=%lu",
@@ -178,6 +212,8 @@ static bool setup_context(const ai_inference_model_asset_t *model_asset)
         g_tflm.tensor_arena = NULL;
         return false;
     }
+
+    log_heap_state("tflm:after AllocateTensors");
 
     g_tflm.initialized = true;
     return true;
@@ -210,6 +246,77 @@ static uint16_t input_height(const TfLiteTensor *tensor, const ai_inference_mode
     return model_asset->input_height;
 }
 
+#if AIOT_AI_LUMA_NORM
+/* Night input (10/10): at the gain ceiling the OV2640 rows carry offsets (bands across the frame) and the
+ * plate is half as bright as in the day, and the model, trained on day frames, finds nothing. Each row of
+ * the region is moved by the difference of its median to the median of the frame, then the region is
+ * scaled so that its median is the day level (153), never darker: in the day the input barely changes.
+ * Integer arithmetic; replay_workers.night_luma is the same on the host. */
+#define LUMA_NORM_DAY 153U
+static uint8_t *g_luma;
+static size_t g_luma_size;
+
+static uint8_t hist_median(const uint32_t *hist, uint32_t n)
+{
+    uint32_t seen = 0U;
+    for (unsigned v = 0; v < 256U; ++v) {
+        seen += hist[v];
+        if (2U * seen > n) {
+            return static_cast<uint8_t>(v);
+        }
+    }
+    return 255U;
+}
+
+/* the luma of the region rows [ry, ry+rh), normalized, into g_luma (width per row); false without memory */
+static bool luma_norm(const uint8_t *rgb565, uint16_t width, uint16_t height, uint32_t rx, uint32_t ry,
+    uint32_t rw, uint32_t rh)
+{
+    size_t need = static_cast<size_t>(width) * height;
+    if (g_luma_size < need) {
+        heap_caps_free(g_luma);
+        g_luma = static_cast<uint8_t *>(heap_caps_malloc(need, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        g_luma_size = g_luma ? need : 0U;
+        if (!g_luma) {
+            return false;
+        }
+    }
+    static uint32_t hist[256], rhist[256];
+    memset(hist, 0, sizeof(hist));
+    for (size_t i = 0; i < need; ++i) {
+        g_luma[i] = rgb565_luma(rgb565 + i * 2U);
+        hist[g_luma[i]]++;
+    }
+    int32_t frame_median = hist_median(hist, need);
+    memset(hist, 0, sizeof(hist));
+    for (uint32_t y = ry; y < ry + rh; ++y) {
+        uint8_t *row = g_luma + static_cast<size_t>(y) * width;
+        memset(rhist, 0, sizeof(rhist));
+        for (uint16_t x = 0; x < width; ++x) {
+            rhist[row[x]]++;
+        }
+        int32_t shift = frame_median - hist_median(rhist, width);
+        for (uint16_t x = 0; x < width; ++x) {
+            int32_t v = row[x] + shift;
+            row[x] = static_cast<uint8_t>(v < 0 ? 0 : v > 255 ? 255 : v);
+        }
+        for (uint32_t x = rx; x < rx + rw; ++x) {
+            hist[row[x]]++;
+        }
+    }
+    uint32_t median = hist_median(hist, rw * rh);
+    uint32_t gain = median > 0U && median < LUMA_NORM_DAY ? (LUMA_NORM_DAY * 256U) / median : 256U;
+    for (uint32_t y = ry; y < ry + rh; ++y) {
+        uint8_t *row = g_luma + static_cast<size_t>(y) * width;
+        for (uint32_t x = rx; x < rx + rw; ++x) {
+            uint32_t v = (row[x] * gain) >> 8;
+            row[x] = static_cast<uint8_t>(v > 255U ? 255U : v);
+        }
+    }
+    return true;
+}
+#endif
+
 static bool fill_input_tensor(TfLiteTensor *input,
     const uint8_t *rgb565,
     uint16_t width,
@@ -226,12 +333,28 @@ static bool fill_input_tensor(TfLiteTensor *input,
         return false;
     }
 
+    /* the part of the frame that the model sees */
+    uint32_t rx = 0U, ry = 0U, rw = width, rh = height;
+#if AIOT_AI_ROI
+    rx = width * AIOT_AI_ROI_X0 / 1000U;
+    ry = height * AIOT_AI_ROI_Y0 / 1000U;
+    rw = width * AIOT_AI_ROI_X1 / 1000U - rx;
+    rh = height * AIOT_AI_ROI_Y1 / 1000U - ry;
+#endif
+#if AIOT_AI_LUMA_NORM
+    bool norm = luma_norm(rgb565, width, height, rx, ry, rw, rh);
+#endif
     for (uint16_t y = 0; y < target_height; ++y) {
-        uint16_t source_y = static_cast<uint16_t>((static_cast<uint32_t>(y) * height) / target_height);
+        uint16_t source_y = static_cast<uint16_t>(ry + (static_cast<uint32_t>(y) * rh) / target_height);
         for (uint16_t x = 0; x < target_width; ++x) {
-            uint16_t source_x = static_cast<uint16_t>((static_cast<uint32_t>(x) * width) / target_width);
+            uint16_t source_x = static_cast<uint16_t>(rx + (static_cast<uint32_t>(x) * rw) / target_width);
             const uint8_t *pixel = rgb565 + (((static_cast<uint32_t>(source_y) * width) + source_x) * 2U);
             uint8_t luma = rgb565_luma(pixel);
+#if AIOT_AI_LUMA_NORM
+            if (norm) {
+                luma = g_luma[static_cast<size_t>(source_y) * width + source_x];
+            }
+#endif
             size_t index = (static_cast<size_t>(y) * target_width + x) * static_cast<size_t>(channels);
 
             if (input->type == kTfLiteUInt8) {
@@ -402,10 +525,82 @@ static bool insert_fomo_detection(aiot_ai_result_t *result,
     return true;
 }
 
+#if AIOT_AI_ROI
+/* Objects at the local maxima of the object probability: two touching objects whose cells
+ * adjoin stay two objects. A cell is a maximum when no neighbour is higher, and no neighbour
+ * before it in reading order is as high, so a plateau gives one object. The position is the
+ * centre of the cell, in the units of the whole frame; the extent is one cell.
+ * A model with a count head (more than two channels: background, 1, 2, ... objects,
+ * experiments/screw_mission/train_turntable_fomo2.py) gives one maximum for objects that touch;
+ * its object probability is 1 - background, and a maximum is emitted as many times as its most
+ * likely count, at the same place. */
+static bool populate_fomo_peaks(const TfLiteTensor *output,
+    const ai_inference_model_asset_t *model_asset,
+    aiot_ai_result_t *result)
+{
+    if (output == NULL || output->dims == NULL || model_asset == NULL || result == NULL) {
+        return false;
+    }
+    const int gh = tensor_dim_from_back(output, 2), gw = tensor_dim_from_back(output, 1);
+    const int channels = tensor_dim_from_back(output, 0);
+    if (gh <= 0 || gw <= 0 || channels < 2 || channels > 8 || gw * gh > 1024) {
+        return false;
+    }
+    const uint8_t threshold = model_asset->detection_threshold == 0U ? 128U : model_asset->detection_threshold;
+    const bool counted = channels > 2;
+    const int object = model_asset->background_index == 0U ? 1 : 0;
+    static uint8_t conf[1024];
+    static uint8_t many[1024];
+    result->detection_count = 0U;
+    for (int i = 0; i < gw * gh; ++i) {
+        many[i] = 1U;
+        if (counted) {
+            conf[i] = score_to_confidence(1.0f - tensor_value_as_score(output, i * channels));
+            float best = tensor_value_as_score(output, i * channels + 1);
+            for (int k = 2; k < channels; ++k) {
+                const float v = tensor_value_as_score(output, i * channels + k);
+                if (v > best) { best = v; many[i] = static_cast<uint8_t>(k); }
+            }
+        } else {
+            conf[i] = score_to_confidence(tensor_value_as_score(output, i * channels + object));
+        }
+        if (conf[i] > result->raw_score) result->raw_score = conf[i];
+    }
+    const uint32_t x0 = 256U * AIOT_AI_ROI_X0 / 1000U, y0 = 256U * AIOT_AI_ROI_Y0 / 1000U;
+    const uint32_t xw = 256U * AIOT_AI_ROI_X1 / 1000U - x0, yh = 256U * AIOT_AI_ROI_Y1 / 1000U - y0;
+    for (int y = 0; y < gh; ++y) {
+        for (int x = 0; x < gw; ++x) {
+            const int i = y * gw + x;
+            if (conf[i] < threshold) continue;
+            bool peak = true;
+            for (int dy = -1; dy <= 1 && peak; ++dy) {
+                for (int dx = -1; dx <= 1 && peak; ++dx) {
+                    const int nx = x + dx, ny = y + dy;
+                    if ((dx == 0 && dy == 0) || nx < 0 || ny < 0 || nx >= gw || ny >= gh) continue;
+                    const int j = ny * gw + nx;
+                    if (conf[j] > conf[i] || (j < i && conf[j] == conf[i])) peak = false;
+                }
+            }
+            if (!peak) continue;
+            for (uint8_t n = 0; n < many[i]; ++n) {
+                insert_fomo_detection(result, 1U, conf[i],
+                    static_cast<uint8_t>(x0 + ((2U * x + 1U) * xw) / (2U * gw)),
+                    static_cast<uint8_t>(y0 + ((2U * y + 1U) * yh) / (2U * gh)),
+                    static_cast<uint8_t>(xw / gw), static_cast<uint8_t>(yh / gh));
+            }
+        }
+    }
+    return true;
+}
+#endif
+
 static bool populate_fomo_detections(const TfLiteTensor *output,
     const ai_inference_model_asset_t *model_asset,
     aiot_ai_result_t *result)
 {
+#if AIOT_AI_ROI
+    return populate_fomo_peaks(output, model_asset, result);
+#endif
     int grid_height;
     int grid_width;
     int channel_count;
@@ -630,7 +825,8 @@ static bool populate_classification_detection(const TfLiteTensor *output,
      * its own configurable thresholds, and the heartbeat reports it. Only
      * the detection list (used for scheduler importance) stays gated here. */
     result->raw_score = confidence;
-    ESP_LOGI(TAG, "person score=%u/255 (det_thr=%u)", (unsigned)confidence, (unsigned)threshold);
+    ESP_LOGI(TAG, "class score=%u/255 idx=%d (det_thr=%u)",
+        (unsigned)confidence, idx, (unsigned)threshold);
     if (confidence < threshold) {
         result->detection_count = 0U;
         return true;

@@ -4,9 +4,18 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_timer.h"
+#include <stdio.h>
 #include "esp_heap_caps.h"
 #include "ai_inference_tflm.h"
 #include "jpeg_decoder.h"
+#ifndef AIOT_AI_ROI
+#define AIOT_AI_ROI 0
+#endif
+#ifndef AIOT_AI_ROI_SCALE
+#define AIOT_AI_ROI_SCALE 8
+#endif
+#define AIOT_AI_QUARTER (AIOT_AI_ROI && AIOT_AI_ROI_SCALE == 4)
 
 static const char *TAG = "ai_inference";
 
@@ -19,12 +28,34 @@ static const char *TAG = "ai_inference";
  * The 40x30 AIOT_INFERENCE_INPUT_* constants are only the motion detector's
  * subsample grid, independent of this decode resolution.
  */
+#if AIOT_CAMERA_UXGA && AIOT_AI_QUARTER
+/* the model region is cut from a quarter-size frame, 400x300 */
+#define AIOT_DECODE_WIDTH 400U
+#elif AIOT_CAMERA_UXGA
+#define AIOT_DECODE_WIDTH 200U
+#else
 #define AIOT_DECODE_WIDTH 160U
-#define AIOT_DECODE_HEIGHT 120U
+#endif
+#if AIOT_CAMERA_UXGA && AIOT_AI_QUARTER
+#define AIOT_DECODE_HEIGHT 300U
+#else
+#define AIOT_DECODE_HEIGHT 160U
+#endif
 #define AIOT_DECODE_RGB565_BYTES (AIOT_DECODE_WIDTH * AIOT_DECODE_HEIGHT * 2U)
 
 static uint8_t *g_decode_buffer;
 static size_t g_decode_buffer_size;
+
+static void ai_inference_log_heap_state(const char *stage)
+{
+    ESP_LOGI(TAG,
+        "%s: internal_free=%u internal_largest=%u spiram_free=%u spiram_largest=%u",
+        stage,
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+        (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+        (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+}
 
 static uint8_t ai_inference_rgb565_luma(const uint8_t *pixel)
 {
@@ -147,7 +178,7 @@ static bool ai_inference_detect_motion(ai_inference_t *inference,
 }
 
 static bool ai_inference_decode_jpeg(const uint8_t *jpeg,
-    uint16_t jpeg_len,
+    uint32_t jpeg_len,
     ai_inference_t *inference,
     aiot_ai_result_t *result,
     esp_jpeg_image_output_t *decode_info)
@@ -188,6 +219,23 @@ static bool ai_inference_decode_jpeg(const uint8_t *jpeg,
         .out_scale = JPEG_IMAGE_SCALE_0,
     };
 
+    /* Preserve the 160x120 AI decode buffer when the preview is QVGA. */
+    if (source_info.width == 320U && source_info.height == 240U)
+        decode_cfg.out_scale = JPEG_IMAGE_SCALE_1_2;
+    if (source_info.width == 640U && source_info.height == 640U)
+        decode_cfg.out_scale = JPEG_IMAGE_SCALE_1_4;
+    /* Higher-resolution preview keeps the bounded 160-square AI buffer. */
+    if (source_info.width == 1024U && source_info.height == 1024U)
+        decode_cfg.out_scale = JPEG_IMAGE_SCALE_1_8;
+    /* Native UXGA preview decodes to 200x150, never full-resolution RGB. */
+    if (source_info.width == 1600U && source_info.height == 1200U)
+        decode_cfg.out_scale = AIOT_AI_QUARTER ? JPEG_IMAGE_SCALE_1_4 : JPEG_IMAGE_SCALE_1_8;
+#if AIOT_CAMERA_SVGA_TEST
+    /* Match the UXGA test's 200x150 decoded AI raster and 96x96 model input. */
+    if (source_info.width == 800U && source_info.height == 600U)
+        decode_cfg.out_scale = JPEG_IMAGE_SCALE_1_4;
+#endif
+
     esp_err_t err = esp_jpeg_decode(&decode_cfg, decode_info);
     if (err != ESP_OK) {
         inference->decode_failures++;
@@ -204,7 +252,7 @@ static bool ai_inference_decode_jpeg(const uint8_t *jpeg,
 
 static bool ai_inference_run_heuristic(ai_inference_t *inference,
     const uint8_t *jpeg,
-    uint16_t jpeg_len,
+    uint32_t jpeg_len,
     uint32_t source_sequence,
     aiot_ai_result_t *result)
 {
@@ -219,9 +267,87 @@ static bool ai_inference_run_heuristic(ai_inference_t *inference,
     return ai_inference_detect_motion(inference, g_decode_buffer, decode_info.width, decode_info.height, result);
 }
 
+#if AIOT_AI_DARK_BLOBS
+/*
+ * Dark objects on a bright plate (screws on a turntable). A pixel is dark when its luma is
+ * below AIOT_AI_DARK_FRACTION percent of the median luma of the frame. Connected dark
+ * regions between the area limits are objects; larger regions are background outside the
+ * plate or a fixture, smaller ones noise. The same detector exists for the host in
+ * experiments/moq/dark_blobs.py.
+ */
+#ifndef AIOT_AI_DARK_FRACTION
+#define AIOT_AI_DARK_FRACTION 55
+#endif
+#define AIOT_BLOB_AREA_MIN 3U
+#define AIOT_BLOB_AREA_MAX 80U
+static uint8_t *g_blob_mask;     /* 0 bright, 1 dark, 2 visited */
+static uint16_t *g_blob_stack;
+
+static bool ai_inference_detect_dark_blobs(const uint8_t *rgb565, uint16_t width, uint16_t height,
+                                           aiot_ai_result_t *result)
+{
+    const uint32_t n = (uint32_t)width * height;
+    if (n == 0U || n > 65535U) return false;
+    if (g_blob_mask == NULL) {
+        g_blob_mask = heap_caps_malloc(65536U, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        g_blob_stack = heap_caps_malloc(65536U * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (g_blob_mask == NULL || g_blob_stack == NULL) return false;
+    }
+    uint32_t histogram[256] = {0};
+    for (uint32_t i = 0; i < n; ++i) {
+        uint8_t l = ai_inference_rgb565_luma(rgb565 + i * 2U);
+        g_blob_mask[i] = l;
+        histogram[l]++;
+    }
+    uint32_t below = 0U, median = 0U;
+    while (median < 255U && (below += histogram[median]) < n / 2U) median++;
+    const uint32_t threshold = median * AIOT_AI_DARK_FRACTION / 100U;
+    for (uint32_t i = 0; i < n; ++i) g_blob_mask[i] = g_blob_mask[i] < threshold ? 1U : 0U;
+
+    uint8_t count = 0U;
+    for (uint32_t start = 0; start < n && count < AIOT_AI_RESULT_MAX_DETECTIONS; ++start) {
+        if (g_blob_mask[start] != 1U) continue;
+        uint32_t top = 0U, area = 0U;
+        uint16_t min_x = width, min_y = height, max_x = 0U, max_y = 0U;
+        g_blob_stack[top++] = (uint16_t)start;
+        g_blob_mask[start] = 2U;
+        while (top) {
+            uint32_t p = g_blob_stack[--top];
+            uint16_t x = (uint16_t)(p % width), y = (uint16_t)(p / width);
+            area++;
+            if (x < min_x) min_x = x;
+            if (x > max_x) max_x = x;
+            if (y < min_y) min_y = y;
+            if (y > max_y) max_y = y;
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    int nx = (int)x + dx, ny = (int)y + dy;
+                    if (nx < 0 || ny < 0 || nx >= (int)width || ny >= (int)height) continue;
+                    uint32_t q = (uint32_t)ny * width + (uint32_t)nx;
+                    if (g_blob_mask[q] != 1U || top >= 65535U) continue;
+                    g_blob_mask[q] = 2U;
+                    g_blob_stack[top++] = (uint16_t)q;
+                }
+            }
+        }
+        if (area < AIOT_BLOB_AREA_MIN || area > AIOT_BLOB_AREA_MAX) continue;
+        aiot_ai_detection_t *d = &result->detections[count++];
+        d->class_id = AIOT_AI_CLASS_GENERIC_OBJECT;
+        d->confidence = 255U;
+        d->x = ai_inference_normalize_coord(min_x, width);
+        d->y = ai_inference_normalize_coord(min_y, height);
+        d->width = ai_inference_normalize_extent((uint16_t)(max_x - min_x + 1U), width);
+        d->height = ai_inference_normalize_extent((uint16_t)(max_y - min_y + 1U), height);
+    }
+    result->detection_count = count;
+    result->raw_score = count ? 255U : 0U;
+    return true;
+}
+#endif
+
 static bool ai_inference_run_tflm(ai_inference_t *inference,
     const uint8_t *jpeg,
-    uint16_t jpeg_len,
+    uint32_t jpeg_len,
     uint32_t source_sequence,
     aiot_ai_result_t *result)
 {
@@ -241,10 +367,15 @@ static bool ai_inference_run_tflm(ai_inference_t *inference,
         return false;
     }
 
+#if AIOT_MOBILITY_CAMERA
+    int64_t decode_start = esp_timer_get_time();
+#endif
     if (!ai_inference_decode_jpeg(jpeg, jpeg_len, inference, result, &decode_info)) {
         return false;
     }
-
+#if AIOT_MOBILITY_CAMERA
+    int64_t model_start = esp_timer_get_time();
+#endif
     if (!ai_inference_tflm_run(model, g_decode_buffer, decode_info.width, decode_info.height, result)) {
         inference->backend_fallbacks++;
         ESP_LOGW(TAG,
@@ -255,8 +386,61 @@ static bool ai_inference_run_tflm(ai_inference_t *inference,
         return false;
     }
 
+#if AIOT_MOBILITY_CAMERA
+    printf("[AI_PHASE] {\"seq\":%lu,\"decode_us\":%lld,\"model_us\":%lld}\n", (unsigned long)source_sequence,
+        (long long)(model_start-decode_start), (long long)(esp_timer_get_time()-model_start));
+#endif
     inference->inference_count++;
     return true;
+}
+
+size_t ai_inference_copy_raster(uint8_t *dst, size_t capacity, uint16_t width, uint16_t height)
+{
+    size_t bytes = (size_t)width * height * 2U;
+    if (dst == NULL || g_decode_buffer == NULL || bytes == 0U || bytes > g_decode_buffer_size || bytes > capacity) {
+        return 0U;
+    }
+    for (size_t i = 0; i < bytes; i += 2U) {
+        dst[i] = g_decode_buffer[i + 1U];
+        dst[i + 1U] = g_decode_buffer[i];
+    }
+    return bytes;
+}
+
+/* Decodes a JPEG into the caller's buffer at the detector's raster (UXGA at 1/8: 200x150), byte-swapped as
+ * ai_inference_copy_raster returns it; reentrant (its own output buffer), for a decoder on another core. */
+size_t ai_inference_decode_raster(const uint8_t *jpeg, uint32_t jpeg_len, uint8_t *dst, size_t capacity,
+    uint16_t *width, uint16_t *height)
+{
+    if (jpeg == NULL || dst == NULL || jpeg_len < 100U || jpeg[0] != 0xFF || jpeg[1] != 0xD8) return 0U;
+    esp_jpeg_image_cfg_t info_cfg = {.indata = (uint8_t *)jpeg, .indata_size = jpeg_len,
+        .out_format = JPEG_IMAGE_FORMAT_RGB565, .out_scale = JPEG_IMAGE_SCALE_0};
+    esp_jpeg_image_output_t info = {0};
+    if (esp_jpeg_get_image_info(&info_cfg, &info) != ESP_OK) return 0U;
+    esp_jpeg_image_cfg_t cfg = {.indata = (uint8_t *)jpeg, .indata_size = jpeg_len, .outbuf = dst,
+        .outbuf_size = (uint32_t)capacity, .out_format = JPEG_IMAGE_FORMAT_RGB565, .out_scale = JPEG_IMAGE_SCALE_0};
+    if (info.width == 320U && info.height == 240U) cfg.out_scale = JPEG_IMAGE_SCALE_1_2;
+    if (info.width == 640U && info.height == 640U) cfg.out_scale = JPEG_IMAGE_SCALE_1_4;
+    if (info.width == 1024U && info.height == 1024U) cfg.out_scale = JPEG_IMAGE_SCALE_1_8;
+    if (info.width == 1600U && info.height == 1200U) cfg.out_scale = AIOT_AI_QUARTER ? JPEG_IMAGE_SCALE_1_4 : JPEG_IMAGE_SCALE_1_8;
+    esp_jpeg_image_output_t out = {0};
+    if (esp_jpeg_decode(&cfg, &out) != ESP_OK) return 0U;
+    size_t bytes = (size_t)out.width * out.height * 2U;
+    if (bytes > capacity) return 0U;
+    for (size_t i = 0; i < bytes; i += 2U) { uint8_t t = dst[i]; dst[i] = dst[i + 1U]; dst[i + 1U] = t; }
+    *width = out.width; *height = out.height;
+    return bytes;
+}
+
+bool ai_inference_decode_only(ai_inference_t *inference, const uint8_t *jpeg, uint32_t jpeg_len,
+    uint32_t source_sequence, aiot_ai_result_t *result)
+{
+    esp_jpeg_image_output_t decode_info = {0};
+    if (inference == NULL || result == NULL) {
+        return false;
+    }
+    aiot_ai_result_init(result, AIOT_AI_BACKEND_NONE, source_sequence);
+    return ai_inference_decode_jpeg(jpeg, jpeg_len, inference, result, &decode_info);
 }
 
 void ai_inference_init(ai_inference_t *inference)
@@ -267,11 +451,14 @@ void ai_inference_init(ai_inference_t *inference)
 
     /* Allocate the shared decode buffer once, preferring PSRAM. */
     if (g_decode_buffer == NULL) {
+        ai_inference_log_heap_state("ai_init:before decode buffer alloc");
         g_decode_buffer_size = AIOT_DECODE_RGB565_BYTES;
         g_decode_buffer = heap_caps_malloc(g_decode_buffer_size,
             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        ai_inference_log_heap_state("ai_init:after psram decode buffer alloc");
         if (g_decode_buffer == NULL) {
             g_decode_buffer = heap_caps_malloc(g_decode_buffer_size, MALLOC_CAP_8BIT);
+            ai_inference_log_heap_state("ai_init:after internal decode buffer fallback");
         }
         if (g_decode_buffer == NULL) {
             g_decode_buffer_size = 0;
@@ -287,6 +474,7 @@ void ai_inference_init(ai_inference_t *inference)
         (inference->model_ready && ai_inference_tflm_runtime_available())
             ? AI_INFERENCE_BACKEND_TFLM
             : AI_INFERENCE_BACKEND_HEURISTIC;
+    ai_inference_log_heap_state("ai_init:complete");
 }
 
 void ai_inference_get_capabilities(ai_inference_capabilities_t *capabilities)
@@ -312,7 +500,7 @@ void ai_inference_get_capabilities(ai_inference_capabilities_t *capabilities)
 
 bool ai_inference_run(ai_inference_t *inference,
     const uint8_t *jpeg,
-    uint16_t jpeg_len,
+    uint32_t jpeg_len,
     uint32_t source_sequence,
     aiot_ai_result_t *result)
 {
@@ -326,6 +514,16 @@ bool ai_inference_run(ai_inference_t *inference,
     if (!inference->initialized) {
         ai_inference_init(inference);
     }
+#if AIOT_AI_DARK_BLOBS
+    {
+        esp_jpeg_image_output_t decode_info = {0};
+        aiot_ai_result_init(result, AIOT_AI_BACKEND_DARK_BLOBS, source_sequence);
+        inference->selected_backend = AI_INFERENCE_BACKEND_HEURISTIC;
+        if (!ai_inference_decode_jpeg(jpeg, jpeg_len, inference, result, &decode_info)) return false;
+        inference->inference_count++;
+        return ai_inference_detect_dark_blobs(g_decode_buffer, decode_info.width, decode_info.height, result);
+    }
+#endif
 
     inference->model_ready = ai_inference_model_asset_available();
     tflm_available = inference->model_ready && ai_inference_tflm_runtime_available();

@@ -13,7 +13,10 @@
 /* v2 appends raw_score (+3 reserved bytes) to the v1 header. Parsers accept
  * both; the serializer always emits v2. */
 #define AIOT_AI_RESULT_VERSION 0x02U
-#define AIOT_AI_RESULT_MAX_DETECTIONS 3U
+/* The turntable mission contains 19 simultaneous objects.  Three entries were
+ * enough for the original presence detector, but silently truncated a valid
+ * multi-object FOMO result.  Keep five spare entries for crowded frames. */
+#define AIOT_AI_RESULT_MAX_DETECTIONS 24U
 #define AIOT_AI_RESULT_HEADER_SIZE_V1 16U
 #define AIOT_AI_RESULT_HEADER_SIZE 20U
 #define AIOT_AI_RESULT_DETECTION_SIZE 6U
@@ -24,6 +27,8 @@ typedef enum {
     AIOT_AI_BACKEND_NONE = 0,
     AIOT_AI_BACKEND_HEURISTIC = 1,
     AIOT_AI_BACKEND_TFLM = 2,
+    AIOT_AI_BACKEND_ESPDL = 3,
+    AIOT_AI_BACKEND_DARK_BLOBS = 4,   /* dark objects on a bright plate, ai_inference.c */
 } aiot_ai_backend_t;
 
 typedef enum {

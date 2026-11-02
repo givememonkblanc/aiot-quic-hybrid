@@ -56,6 +56,14 @@
 
 static const char *TAG = "cam_hal";
 static cam_obj_t *cam_obj = NULL;
+#if AIOT_PIPELINE_PROFILE
+static uint64_t s_camera_ready[4];
+uint64_t camera_profile_ready_us(const camera_fb_t *fb) {
+    if(cam_obj)for(int i=0;i<cam_obj->frame_cnt && i<4;++i)
+        if(&cam_obj->frames[i].fb==fb)return s_camera_ready[i];
+    return 0;
+}
+#endif
 #if defined(CONFIG_CAMERA_PSRAM_DMA)
 #define CAMERA_PSRAM_DMA_ENABLED CONFIG_CAMERA_PSRAM_DMA
 #else
@@ -415,6 +423,9 @@ static void cam_task(void *arg)
                                 ESP_CAMERA_ETS_PRINTF(DRAM_STR("cam_hal: FB-SIZE: %u != %u\r\n"), frame_buffer_event->len, (unsigned) cam_obj->fb_size);
                             }
                         }
+#if AIOT_PIPELINE_PROFILE
+                        if(frame_pos<4)s_camera_ready[frame_pos]=esp_timer_get_time();
+#endif
                         //send frame
                         if(!cam_obj->frames[frame_pos].en && xQueueSend(cam_obj->frame_buffer_queue, (void *)&frame_buffer_event, 0) != pdTRUE) {
                             //pop frame buffer from the queue

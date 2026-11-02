@@ -65,8 +65,12 @@ int ngtcp2_balloc_get(ngtcp2_balloc *balloc, void **pbuf, size_t n) {
   assert(n <= balloc->blklen);
 
   if (ngtcp2_buf_left(&balloc->buf) < n) {
+    /* ESP-IDF malloc can be only 4-byte aligned. Rounding the payload up
+       to 16 bytes can then need 12 bytes after the 8-byte header, so the
+       old fixed 8-byte allowance could overrun the allocation by 4 bytes.
+       Reserve the full alignment slack for every possible base address. */
     p = ngtcp2_mem_malloc(balloc->mem,
-                          sizeof(ngtcp2_memblock_hd) + 0x8u + balloc->blklen);
+                          sizeof(ngtcp2_memblock_hd) + 0xfu + balloc->blklen);
     if (p == NULL) {
       return NGTCP2_ERR_NOMEM;
     }

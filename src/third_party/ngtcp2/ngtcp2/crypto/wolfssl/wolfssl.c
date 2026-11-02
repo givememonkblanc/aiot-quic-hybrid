@@ -37,7 +37,11 @@
 
 #include "shared.h"
 
+#if AIOT_MOBILITY_RESEARCH
+#define PRINTF_DEBUG 0
+#else
 #define PRINTF_DEBUG 1
+#endif
 #if PRINTF_DEBUG
 #  define DEBUG_MSG(...) printf(__VA_ARGS__)
 #else /* !PRINTF_DEBUG */

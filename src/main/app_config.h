@@ -107,7 +107,18 @@
 #define APP_STREAM_ENABLE 1
 #endif
 #ifndef APP_STREAM_INTERVAL_MS
-#define APP_STREAM_INTERVAL_MS 350   /* ~3 fps */
+#if AIOT_MOBILITY_CAMERA
+#define APP_STREAM_INTERVAL_MS 33    /* >=30 FPS ceiling; measure completed RX FPS */
+#else
+#define APP_STREAM_INTERVAL_MS 350
+#endif
+#endif
+
+/* Bound uninterrupted TX work by elapsed time, not by packet count. A 1ms
+ * sleep after every 1KB chunk alone caps payload throughput below 1MB/s.
+ * Still yield to inference/IDLE regularly, retaining watchdog coverage. */
+#ifndef APP_NET_TX_BURST_US
+#define APP_NET_TX_BURST_US 3000
 #endif
 
 /* Presence heartbeat cadence default (overridable via NVS heartbeat.ms). */
