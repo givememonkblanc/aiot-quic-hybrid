@@ -41,6 +41,35 @@ launches keep whatever you set.
 
 ## Pages
 
+For the ESP32 handoff research firmware, run the dashboard with `--research`
+and `--feed PATH/TO/feed.jsonl`. This displays typed camera/AI status,
+synthetic telemetry, critical events, AI results, and JPEG chunks without
+device registration. `--image PATH/TO/latest.jpg` enables the camera preview.
+Counts cover only the last 256 KiB of the feed, not total delivery rates;
+file modification age indicates receiver activity. The API retains up to 200
+recent messages from that window; the page filters them by type and displays
+the newest 20 with expandable JSON details. AI results are joined to
+`ai_recv.csv` next to the feed (override with `--ai-log`) by connection ID,
+object sequence, generation timestamp, and receiver timestamp. Binary payloads
+in the text feed are not used to reconstruct AI values. JPEG rows represent
+chunks, not confirmed complete frames. The page marks the feed offline after
+20 seconds without updates. Board generation timestamps are not interpreted
+as wall-clock times or one-way latency; AI raw scores are not accuracy.
+
+The fixed status panel beside the images retains the latest camera frame,
+AI result, telemetry, memory report, and critical event independently. A
+background reader bootstraps from the last 4 MiB and then consumes new complete
+lines, so camera traffic does not evict infrequent status updates. Receiver
+timestamps use the local Linux monotonic clock; ages describe time since
+receipt, not device-to-server latency. JPEG completion requires contiguous
+chunk sequences and SOI/EOI markers (not an image-quality validation).
+AI/frame arrival differences match connection ID and generation timestamp;
+positive differences mean the AI result arrived after frame assembly.
+The latest snapshot age uses the image processor's publication time instead.
+Periodic rows warn after three times their recent median receive interval,
+with a 3-second minimum or a 20-second fallback before interval samples exist.
+Event-driven rows do not warn just because no new event occurred.
+
 - **`/login`** — session sign-in (HttpOnly cookie). Everything else requires it.
 - **`/`** — live occupancy: a **live camera view** (MJPEG), OCCUPIED / VACANT
   per device, time-in-state, a presence-history strip, today's occupied time &

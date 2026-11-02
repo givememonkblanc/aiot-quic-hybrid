@@ -156,46 +156,33 @@ static void aiot_image_archive(const uint8_t* buf, size_t len, uint32_t gen_ts_m
     fclose(f);
 }
 
-static void aiot_image_reassemble(const uint8_t* payload, size_t len, uint32_t gen_ts_ms)
+static void aiot_image_reassemble(const uint8_t* payload, size_t len,
+    uint32_t gen_ts_ms, uint32_t seq, const char* cid)
 {
-    if (len == 0) {
-        return;
+    static uint32_t frame_ts, next_seq;
+    static char frame_cid[2 * PICOQUIC_CONNECTION_ID_MAX_SIZE + 1];
+    int start = len >= 2 && payload[0] == 0xff && payload[1] == 0xd8;
+    if (start) {
+        aiot_img_len = 0;
+        frame_ts = gen_ts_ms;
+        snprintf(frame_cid, sizeof(frame_cid), "%s", cid);
+        next_seq = seq;
     }
-    if (aiot_img_len + len > AIOT_IMG_MAX) {
-        aiot_img_len = 0;   /* overflow (missed an EOI): drop and resync */
+    if ((!start && aiot_img_len == 0) || frame_ts != gen_ts_ms ||
+        strcmp(frame_cid, cid) != 0 || next_seq != seq ||
+        aiot_img_len + len > AIOT_IMG_MAX) {
+        aiot_img_len = 0;
+        return;
     }
     memcpy(aiot_img_buf + aiot_img_len, payload, len);
     aiot_img_len += len;
-
-    /* Trim anything before the Start-Of-Image marker. */
-    size_t soi = (size_t)-1;
-    for (size_t i = 0; i + 1 < aiot_img_len; i++) {
-        if (aiot_img_buf[i] == 0xFF && aiot_img_buf[i + 1] == 0xD8) {
-            soi = i;
-            break;
-        }
-    }
-    if (soi == (size_t)-1) {
-        if (aiot_img_len > 1) {         /* keep last byte: FF may straddle chunks */
-            aiot_img_buf[0] = aiot_img_buf[aiot_img_len - 1];
-            aiot_img_len = 1;
-        }
-        return;
-    }
-    if (soi > 0) {
-        memmove(aiot_img_buf, aiot_img_buf + soi, aiot_img_len - soi);
-        aiot_img_len -= soi;
-    }
-    /* Complete frame once we see End-Of-Image. */
-    for (size_t i = 2; i + 1 < aiot_img_len; i++) {
-        if (aiot_img_buf[i] == 0xFF && aiot_img_buf[i + 1] == 0xD9) {
-            size_t frame_len = i + 2;
-            aiot_image_write(aiot_img_buf, frame_len);
-            aiot_image_archive(aiot_img_buf, frame_len, gen_ts_ms);
-            memmove(aiot_img_buf, aiot_img_buf + frame_len, aiot_img_len - frame_len);
-            aiot_img_len -= frame_len;
-            break;
-        }
+    next_seq = seq + 1;
+    /* Only complete, contiguous chunks from one connection/frame may publish. */
+    if (aiot_img_len >= 4 && aiot_img_buf[aiot_img_len-2] == 0xff &&
+        aiot_img_buf[aiot_img_len-1] == 0xd9) {
+        aiot_image_write(aiot_img_buf, aiot_img_len);
+        aiot_image_archive(aiot_img_buf, aiot_img_len, gen_ts_ms);
+        aiot_img_len = 0;
     }
 }
 
@@ -332,7 +319,7 @@ static void picoquic_mqtt_log_datagram(picoquic_cnx_t* cnx, const uint8_t* bytes
         }
         if (bytes[1] == AIOT_TRACK_IMAGE_ID) {
             aiot_image_reassemble(bytes + AIOT_OBJECT_HEADER_SIZE,
-                                  length - AIOT_OBJECT_HEADER_SIZE, gen_ts_ms);
+                                  length - AIOT_OBJECT_HEADER_SIZE, gen_ts_ms, object_seq, cid_hex);
         }
         else if (bytes[1] == AIOT_TRACK_AI_ID) {
             aiot_ai_log(recv_us, cid_hex, object_seq, gen_ts_ms,
@@ -499,7 +486,7 @@ static void picoquic_mqtt_log_publish(picoquic_cnx_t* cnx, const char* topic,
     fprintf(mqtt_event_log_file, "%" PRIu64 ",%s,%.*s,%zu,\"",
         picoquic_current_time(), cid_hex, (int)topic_len, topic, payload_len);
     if (!is_bulk) {
-        size_t log_len = payload_len < 512 ? payload_len : 512;
+        size_t log_len = payload_len < 2048 ? payload_len : 2048;
         for (size_t i = 0; i < log_len; i++) {
             int ch = payload[i];
             if (ch == '"') {
@@ -521,7 +508,7 @@ static void picoquic_mqtt_log_publish(picoquic_cnx_t* cnx, const char* topic,
         aiot_feed_json_string(feed, (const uint8_t*)topic, topic_len);
         fprintf(feed, "\",\"payload\":\"");
         if (!is_bulk) {
-            aiot_feed_json_string(feed, payload, payload_len < 512 ? payload_len : 512);
+            aiot_feed_json_string(feed, payload, payload_len < 2048 ? payload_len : 2048);
         }
         fprintf(feed, "\"}\n");
         fflush(feed);

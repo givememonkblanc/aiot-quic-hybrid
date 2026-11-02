@@ -1093,6 +1093,36 @@ int parse_frame_0rtt_test(picoquic_quic_t* qclient, struct sockaddr* saddr, uint
 }
 
 
+/* A migrating packet can retire the primary tuple CID, but never its own DCID. */
+static int retire_migrating_cid_test(picoquic_quic_t* quic, struct sockaddr* addr,
+    uint64_t now)
+{
+    for (int retire_incoming = 0; retire_incoming < 2; retire_incoming++) {
+        picoquic_cnx_t* cnx = picoquic_create_cnx(quic, picoquic_null_connection_id,
+            picoquic_null_connection_id, addr, now, 0, "test-sni", "test-alpn", 1);
+        if (cnx == NULL) return -1;
+        parse_test_packet_cnx_fix(cnx, now, picoquic_epoch_1rtt, 0);
+        picoquic_local_cnxid_t* old = cnx->path[0]->first_tuple->p_local_cnxid;
+        picoquic_local_cnxid_t* incoming = picoquic_create_local_cnxid(cnx, 0, NULL, now);
+        int failed = old == NULL || incoming == NULL || incoming == old;
+        if (!failed) {
+            uint8_t frame[16];
+            uint8_t* end = picoquic_frames_varint_encode(frame, frame + sizeof(frame),
+                picoquic_frame_type_retire_connection_id);
+            end = picoquic_frames_varint_encode(end, frame + sizeof(frame),
+                retire_incoming ? incoming->sequence : old->sequence);
+            int result = picoquic_decode_frames_ex(cnx, cnx->path[0], frame,
+                (size_t)(end - frame), NULL, picoquic_epoch_1rtt, NULL, NULL, 1, 0, now, incoming);
+            failed = retire_incoming ?
+                (result == 0 || cnx->local_error != PICOQUIC_TRANSPORT_PROTOCOL_VIOLATION) :
+                (result != 0 || cnx->local_error != 0);
+        }
+        picoquic_delete_cnx(cnx);
+        if (failed) return -1;
+    }
+    return 0;
+}
+
 int parse_frame_test(void)
 {
     int ret = 0;
@@ -1114,6 +1144,8 @@ int parse_frame_test(void)
         DBG_PRINTF("%s", "Cannot create QUIC context\n");
         ret = -1;
     }
+
+    if (ret == 0) ret = retire_migrating_cid_test(qclient, (struct sockaddr*)&saddr, simulated_time);
 
     for (size_t i = 0x0C; ret == 0 && i < nb_test_skip_list; i++) {
         for (int sharp_end = 0; ret == 0 && sharp_end < 2; sharp_end++) {

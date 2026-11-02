@@ -898,7 +898,7 @@ const uint8_t* picoquic_parse_retire_connection_id_frame(const uint8_t* bytes, c
 }
 
 const uint8_t* picoquic_decode_retire_connection_id_frame(picoquic_cnx_t* cnx, const uint8_t* bytes, const uint8_t* bytes_max,
-    picoquic_path_t* path_x, int is_mp)
+    picoquic_local_cnxid_t* receiving_cid, int is_mp)
 {
     /* store the connection ID in order to support migration. */
     uint64_t sequence;
@@ -914,10 +914,11 @@ const uint8_t* picoquic_decode_retire_connection_id_frame(picoquic_cnx_t* cnx, c
         picoquic_connection_error(cnx, PICOQUIC_TRANSPORT_FRAME_FORMAT_ERROR,
             (is_mp)?picoquic_frame_type_path_retire_connection_id:picoquic_frame_type_retire_connection_id);
     }
-    else if (path_x->first_tuple->p_local_cnxid != NULL &&
-        (!is_mp || path_x->unique_path_id == unique_path_id) &&
-        sequence == path_x->first_tuple->p_local_cnxid->sequence) {
-        /* Cannot delete the path through which it arrives */
+    else if (receiving_cid != NULL &&
+        (!is_mp || receiving_cid->path_id == unique_path_id) &&
+        sequence == receiving_cid->sequence) {
+        /* RFC 9000 section 19.16: compare with this packet's DCID,
+         * not the primary tuple, which can lag behind during migration. */
         picoquic_connection_error_ex(cnx, PICOQUIC_TRANSPORT_PROTOCOL_VIOLATION,
             (is_mp) ? picoquic_frame_type_path_retire_connection_id : picoquic_frame_type_retire_connection_id,
             "Cannot delete path through which packet arrives");
@@ -6698,14 +6699,14 @@ uint8_t* picoquic_format_bdp_frame(picoquic_cnx_t* cnx, uint8_t* bytes, uint8_t*
  * In some cases, the expected frames are "restricted" to only ACK, STREAM 0 and PADDING.
  */
 
-int picoquic_decode_frames(picoquic_cnx_t* cnx, picoquic_path_t * path_x, const uint8_t* bytes,
+int picoquic_decode_frames_ex(picoquic_cnx_t* cnx, picoquic_path_t * path_x, const uint8_t* bytes,
     size_t bytes_maxsize,
     picoquic_stream_data_node_t* received_data,
     int epoch,
     struct sockaddr* addr_from,
     struct sockaddr* addr_to,
     uint64_t pn64, int path_is_not_allocated,
-    uint64_t current_time)
+    uint64_t current_time, picoquic_local_cnxid_t* receiving_cid)
 {
     const uint8_t *bytes_max = bytes + bytes_maxsize;
     int ack_needed = 0;
@@ -6850,7 +6851,7 @@ int picoquic_decode_frames(picoquic_cnx_t* cnx, picoquic_path_t * path_x, const 
                 break;
             case picoquic_frame_type_retire_connection_id:
                 /* the old code point for ACK frames, but this is taken care of in the ACK tests above */
-                bytes = picoquic_decode_retire_connection_id_frame(cnx, bytes, bytes_max, path_x, 0);
+                bytes = picoquic_decode_retire_connection_id_frame(cnx, bytes, bytes_max, receiving_cid, 0);
                 ack_needed = 1;
                 break;
             case picoquic_frame_type_handshake_done:
@@ -6926,7 +6927,7 @@ int picoquic_decode_frames(picoquic_cnx_t* cnx, picoquic_path_t * path_x, const 
                             ack_needed = 1;
                             break;
                         case picoquic_frame_type_path_retire_connection_id:
-                            bytes = picoquic_decode_retire_connection_id_frame(cnx, bytes0, bytes_max, path_x, 1);
+                            bytes = picoquic_decode_retire_connection_id_frame(cnx, bytes0, bytes_max, receiving_cid, 1);
                             ack_needed = 1;
                             break;
                         case picoquic_frame_type_bdp:
@@ -6987,6 +6988,17 @@ int picoquic_decode_frames(picoquic_cnx_t* cnx, picoquic_path_t * path_x, const 
     }
 
     return bytes != NULL ? 0 : PICOQUIC_ERROR_DETECTED;
+}
+
+/* Compatibility entry point for handshake packets and synthetic frame tests. */
+int picoquic_decode_frames(picoquic_cnx_t* cnx, picoquic_path_t* path_x,
+    const uint8_t* bytes, size_t bytes_max, picoquic_stream_data_node_t* received_data,
+    int epoch, struct sockaddr* addr_from, struct sockaddr* addr_to,
+    uint64_t pn64, int path_is_not_allocated, uint64_t current_time)
+{
+    return picoquic_decode_frames_ex(cnx, path_x, bytes, bytes_max, received_data,
+        epoch, addr_from, addr_to, pn64, path_is_not_allocated, current_time,
+        path_x->first_tuple->p_local_cnxid);
 }
 
 /*

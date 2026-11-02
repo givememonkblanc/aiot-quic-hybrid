@@ -18,6 +18,8 @@ First run sets the admin password from AIOT_PASS (default "admin" — change it
 in Settings). Stdlib only, no external dependencies.
 """
 import argparse
+from pathlib import Path
+import csv
 import hashlib
 import html
 import json
@@ -31,6 +33,7 @@ from datetime import datetime
 from http import cookies as http_cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
+from research_status import ReceiverStatus
 
 _lock = threading.Lock()
 _devices = {}
@@ -39,6 +42,129 @@ _sessions = {}                 # token -> created_ts
 _db = None
 _settings = {}                 # cached: webhook_url, pw_hash, device_names(json)
 _image_path = None             # latest.jpg written by the receiver (live view)
+_research_feed = None
+_ai_log = None
+_receiver_status = None
+
+
+def recent_lines(path, limit=262144):
+    with open(path, "rb") as f:
+        st = os.fstat(f.fileno())
+        start = max(0, st.st_size - limit)
+        f.seek(start)
+        if start:
+            f.readline()
+        lines = f.read().splitlines(keepends=True)
+    return st, [line.decode("utf-8", errors="replace") for line in lines if line.endswith(b'\n')]
+
+
+def ai_records(path):
+    records = {}
+    if not path:
+        return records
+    try:
+        with open(path) as f:
+            header = next(csv.reader(f))
+        _, lines = recent_lines(path)
+        for values in csv.reader(lines):
+            row = dict(zip(header, values))
+            try:
+                key = (row["cid"], int(row["object_seq"]), int(row["gen_ts_ms"]), int(row["recv_us"]))
+                records[key] = {k: int(v) for k, v in row.items() if k != "cid"}
+            except (KeyError, ValueError):
+                continue
+    except (OSError, StopIteration):
+        pass
+    return records
+
+
+def describe_message(rec, ai):
+    if not isinstance(rec, dict) or rec.get("kind") not in ("datagram", "publish"):
+        return None
+    topic, track = rec.get("topic", ""), rec.get("track")
+    raw = rec.get("payload", "")
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError):
+        payload = None
+    m = {"category": "other", "title": "MQTT 메시지", "detail": "",
+         "transport": "DATAGRAM" if rec["kind"] == "datagram" else "STREAM · MQTT",
+         "route": f"트랙 {track}" if rec["kind"] == "datagram" else str(topic),
+         "seq": rec.get("seq"), "gen_us": None, "mode": None,
+         "payload": None, "critical": False}
+    if type(rec.get("gen_ts_ms")) is int:
+        m["gen_us"] = rec["gen_ts_ms"] * 1000
+    if isinstance(payload, dict):
+        m["payload"] = payload
+        if (type(payload.get("seq")) is int and type(payload.get("gen_us")) is int and
+                type(payload.get("critical")) is bool and type(payload.get("mode")) is int and
+                payload["mode"] in (0, 1, 2)):
+            critical = payload["critical"]
+            m.update(category="critical" if critical else "telemetry", critical=critical,
+                     seq=payload["seq"], gen_us=payload["gen_us"], mode=payload["mode"])
+            if payload.get("source") == "camera":
+                m["title"] = "카메라 기반 중요 이벤트" if critical else "카메라·AI 동작 상태"
+                parts = []
+                if type(payload.get("frames")) is int:
+                    parts.append(f"보드 처리 프레임 {payload['frames']}장")
+                if type(payload.get("ai_us")) is int:
+                    parts.append(f"AI 처리 {payload['ai_us'] / 1000:.1f} ms")
+                if payload.get("ok") in (0, 1):
+                    parts.append("초기 카메라·TFLM 확인 " + ("완료" if payload['ok'] else "미완료"))
+                m["detail"] = " · ".join(parts)
+            else:
+                m["title"] = "합성 중요 이벤트" if critical else "합성 텔레메트리"
+                m["detail"] = "핸드오프 시험용 생성 데이터 · 실제 센서 측정값 아님"
+        else:
+            m["title"] = "장치 상태 메시지"
+            m["detail"] = json.dumps(payload, ensure_ascii=False)[:400]
+    elif rec["kind"] == "datagram" and track == 3:
+        m.update(category="image", title="카메라 JPEG 조각",
+                 detail="영상 프레임을 나눈 데이터 · 조각 수신만으로 전체 프레임 완성을 뜻하지 않음")
+    elif rec["kind"] == "datagram" and track == 2:
+        m.update(category="ai", title="AI 추론 결과")
+        key = (rec.get("cid"), rec.get("seq"), rec.get("gen_ts_ms"), rec.get("t"))
+        result = ai.get(key)
+        if result:
+            backend = {0: "없음", 1: "휴리스틱", 2: "TFLM"}.get(result.get("backend"), "알 수 없음")
+            m["detail"] = (f"{backend} · 검출 {result.get('det_count', 0)}개 · "
+                           f"원시 점수 {result.get('raw_score', 0)}/255 · "
+                           f"입력 {result.get('in_w', 0)}×{result.get('in_h', 0)}")
+            m["payload"] = result
+        else:
+            m["detail"] = "추론 데이터 수신 · 해석 가능한 AI 로그가 없어 검출값 확인 불가"
+    else:
+        m["detail"] = str(raw)[:400]
+    return m
+
+
+def research_snapshot(path, now=None, ai_log=None):
+    """Read a bounded recent window; receiver timestamps are NOT wall time."""
+    now = time.time() if now is None else now
+    result = {"online": False, "age_s": None, "messages": [],
+              "critical": 0, "telemetry": 0, "mode": None}
+    try:
+        st, lines = recent_lines(path)
+    except OSError:
+        return result
+    age = max(0, now - st.st_mtime)
+    result.update(age_s=round(age, 1), online=age < OFFLINE_AFTER_S)
+    ai = ai_records(ai_log)
+    for line in lines:
+        try:
+            rec = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        message = describe_message(rec, ai)
+        if message is None:
+            continue
+        if message["category"] in ("critical", "telemetry"):
+            result[message["category"]] += 1
+            result["mode"] = message["mode"]
+        result["messages"].append(message)
+    result["messages"] = result["messages"][-200:][::-1]
+    result["online"] = result["online"] and bool(result["messages"])
+    return result
 
 
 def read_image():
@@ -484,6 +610,170 @@ tick();setInterval(tick,1500);
 </script></body></html>""".replace("__CSS__", CSS)
 
 
+RESEARCH_CSS = """
+.research .wrap{max-width:1240px;padding:0 24px 28px}
+.research header{margin-bottom:18px;padding:22px 0 18px}.research h1{font-size:21px}
+.research .nav{flex-wrap:wrap}.research #status{padding:5px 10px;border-radius:20px;background:var(--panel);border:1px solid var(--line);font-size:12px}
+.research #status[data-online=true]{color:var(--present)}.research #status[data-online=false]{color:var(--off)}
+.research .overview{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;align-items:stretch;margin-bottom:16px}
+.research .livecam{margin:0;display:flex;flex-direction:column;min-width:0}
+.research .livecam .lh{flex-wrap:wrap;padding:13px 16px;border-bottom:1px solid var(--line)}
+.research .livecam .frame{flex:none;height:320px;min-height:0;overflow:hidden}
+.research .livecam img{width:100%;height:100%;max-height:400px;object-fit:contain}
+.research .camera-foot{min-height:48px;align-items:center;flex-wrap:wrap;padding:10px 16px;font-size:12px;color:var(--dim);display:flex;justify-content:space-between;gap:12px}
+.research .side{display:flex;flex-direction:column;gap:12px;min-width:0}
+.research .metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
+.research .metric{padding:14px 16px;background:var(--panel);border:1px solid var(--line);border-radius:12px;min-width:0}
+.research .metric-label{color:var(--dim);font-size:12px}.research .metric-value{font-size:26px;font-weight:700;margin:4px 0;font-variant-numeric:tabular-nums;line-height:1.35}
+.research .metric-value.compact{font-size:17px;min-height:35px;display:flex;align-items:center;word-break:keep-all}
+.research .metric-note{font-size:11px;color:var(--dim);overflow-wrap:anywhere}
+.research .capture{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;gap:14px;align-items:center;flex:1;min-width:0}
+.research .capture-thumb{width:110px;height:84px;flex:none;background:var(--bg);border-radius:8px;display:grid;place-items:center;overflow:hidden;color:var(--dim);font-size:12px}
+.research #personshot{width:100%;height:100%;object-fit:contain}.research .capture-info{min-width:0}.research .capture h2{font-size:14px;margin:0 0 6px}
+.research .capture p{font-size:12px;color:var(--dim);margin:0 0 6px;line-height:1.6}.research .capture a{font-size:12px}
+.research .log-panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.research .log-heading{padding:15px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-bottom:1px solid var(--line)}
+.research h2{font-size:15px;margin:0}.research .log-controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.research .counts{font-size:12px;color:var(--dim)}.research .counts b{color:var(--tx);font-variant-numeric:tabular-nums}
+.research select{padding:7px 10px;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--tx);font:12px var(--ui);max-width:100%}
+.research #messages{max-height:260px;overflow:auto;padding:0 18px;min-height:70px;scrollbar-gutter:stable}
+.research .message{padding:10px 0;border-bottom:1px solid var(--line);min-width:0}.research .message:last-child{border:0}
+.research .message-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px}.research .message-head small{color:var(--dim);font-family:var(--mono);margin-left:auto}
+.research .message p{font-size:12px;color:var(--dim);margin:5px 0;overflow-wrap:anywhere}.research .message .message-meta{font-size:11px}
+.research .badge{font-size:10px;border-radius:5px;padding:2px 6px;background:var(--bg);color:var(--accent);border:1px solid var(--line)}
+.research details{font-size:11px;color:var(--dim)}.research summary{cursor:pointer;width:fit-content}
+.research pre{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.5 var(--mono);padding:10px;background:var(--bg);border-radius:8px;max-height:180px;overflow:auto}
+.research .log-note{padding:9px 18px;margin:0;border-top:1px solid var(--line);font-size:11px;color:var(--dim)}
+@media(max-width:760px){.research .wrap{padding:0 14px 24px}.research header{gap:12px}.research .nav{margin-left:0;width:100%;gap:14px}.research #status{margin-left:auto}.research .overview{grid-template-columns:1fr;gap:12px}.research .livecam .frame{height:240px;flex:auto;min-height:0}.research .livecam img{max-height:240px}.research .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.research .metric{padding:12px}.research .log-heading{padding:12px}.research #messages{padding:0 12px;max-height:300px}.research .log-controls{width:100%;justify-content:space-between}.research .camera-foot{flex-wrap:wrap}.research h1{font-size:19px}}
+.research .wrap{max-width:1540px}
+.research .workspace{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(340px,1fr);gap:16px;align-items:start;margin-bottom:16px}
+.research .overview{gap:12px;margin:0}.research .livecam .frame{height:300px}
+.research .unified{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;min-width:0}
+.research .unified-head{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:16px 16px 6px}
+.research .unified-intro{font-size:12px;color:var(--dim);padding:0 16px;margin:0 0 12px}
+.research .receive-row{padding:12px 16px;border-top:1px solid var(--line);display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}
+.research .receive-row[data-state=late]{background:rgba(245,158,11,.08)}
+.research .receive-row b{font-size:13px}.research .receive-row p{font-size:12px;color:var(--dim);margin:4px 0 0;overflow-wrap:anywhere}
+.research .receive-timing{text-align:right;min-width:80px;font-size:12px;font-variant-numeric:tabular-nums}
+.research .receive-timing strong{display:block;color:var(--present);font-size:14px}
+.research [data-state=late] .receive-timing strong{color:#c98412}
+.research [data-state=event] .receive-timing strong,.research [data-state=waiting] .receive-timing strong{color:var(--dim)}
+.research .receive-timing small{display:block;color:var(--dim);font-size:10px;margin-top:3px}
+.research .alignment{margin:12px 16px 0;background:var(--bg);padding:10px;border-radius:8px;font-size:12px;line-height:1.8;color:var(--tx)}
+.research .unified-note{font-size:10px;color:var(--dim);padding:0 16px;line-height:1.7}
+.research .raw-toggle{display:block;width:100%;padding:13px 18px;font-size:13px;color:var(--dim)}
+@media(max-width:1100px){.research .workspace{grid-template-columns:1fr}.research .livecam .frame{height:280px}.research #receive-rows{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:760px){.research .overview{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.research .livecam .frame{height:180px}.research .livecam .lh{font-size:12px;padding:10px}.research .livecam .lh small{font-size:10px;margin-left:0}.research .camera-foot{font-size:10px;padding:8px;min-height:72px}.research #receive-rows{grid-template-columns:1fr}.research .unified-head{flex-wrap:wrap}}
+
+"""
+
+RESEARCH_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>ESP32 핸드오프 모니터</title>
+<style>__CSS__</style></head><body class=research><div class=wrap>
+<header><div><h1>ESP32 핸드오프 모니터</h1><div class=osub>QUIC · 카메라 / 텔레메트리 / 중요 이벤트</div></div>
+<div class=nav><a href=/settings>설정</a><a href=/logout>로그아웃</a><span id=status>연결 확인 중…</span></div></header>
+<div class=workspace><main class=overview>
+<section class=livecam aria-label="실시간 카메라"><div class=lh>카메라 <small id=camstatus>수신 확인 중…</small></div>
+<div class=frame><span class=ph id=camplaceholder>카메라 프레임 대기 중…</span><img id=researchcam alt="ESP32 카메라 수신 영상" style="display:none"></div>
+<div class=camera-foot><a href="/focus">선명도 보정·원본 비교 ↗</a><span id=updated>수신 확인 중…</span></div></section>
+<section class=livecam aria-label="AI 추론 이미지"><div class=lh>AI 추론 이미지 <small>최근 감지 프레임 · 중심점 표시</small></div>
+<div class=frame><span class=ph id=personplaceholder>감지 결과 이미지 대기 중…</span><img id=personshot alt="ESP32 AI 검출 중심점이 표시된 최근 감지 이미지" style="display:none"></div>
+<div class=camera-foot><span id=personstatus>검출 대기 중 · 시험 모델</span><a href="/person-original.jpg" target="_blank" rel=noopener id=personlink hidden>해당 프레임 원본 ↗</a></div></section>
+</main><aside class=unified aria-label="통합 수신 현황">
+<div class=unified-head><h2>통합 수신 현황</h2><span id=mode class=badge>모드 확인 중</span></div>
+<p class=unified-intro>각 데이터의 최신 값 · 마지막 수신 후 경과 시간</p>
+<div id=receive-rows></div>
+<div class=alignment id=alignment>영상·AI 프레임 연결 확인 중…</div>
+<p class=unified-note>수신 경과 시간은 편도 전송 지연이 아닙니다. 추론 이미지는 서버 이미지 생성 기준입니다. 갱신 지연: 최근 수신 주기 중앙값의 3배 초과(최소 3초, 표본 없으면 20초). 이벤트·감지 사진은 발생 시 갱신됩니다.</p>
+</aside></div>
+<details class=log-panel><summary class=raw-toggle>수신 메시지 상세 펼치기</summary><div class=log-heading><h2>수신 메시지</h2><div class=log-controls>
+<span class=counts>최근 기록 · 중요 <b id=critical>—</b> / 일반 <b id=telemetry>—</b></span>
+<select id=messagefilter aria-label="메시지 종류"><option value=meaningful>상태·이벤트·AI</option><option value=all>전체</option><option value=telemetry>동작 상태 / 텔레메트리</option><option value=critical>중요 이벤트</option><option value=ai>AI 추론 결과</option><option value=image>카메라 JPEG 조각</option><option value=other>기타 장치 메시지</option></select>
+</div></div><div id=messages></div>
+<p class=log-note>선택한 종류의 최신 20개 · 수신 수는 최근 파일 256 KiB 기준 · 상세 데이터는 펼쳐서 확인</p></details></div>
+<script>
+let cameraVersion=null;
+let latestMessages=[];
+function safeText(value){return String(value??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function renderMessages(){
+ const opened=new Set(Array.from(document.querySelectorAll('#messages details[open]')).map(d=>d.dataset.key));
+ const filter=document.getElementById('messagefilter').value;
+ const items=latestMessages.filter(m=>filter==='all'||(filter==='meaningful'?m.category!=='image':m.category===filter)).slice(0,20);
+ document.getElementById('messages').innerHTML=items.length?items.map(m=>{const key=encodeURIComponent(JSON.stringify([m.route,m.seq,m.gen_us]));return `<article class=message><div class=message-head><b>${safeText(m.title)}</b><span class=badge>${safeText(m.transport)}</span><small>${m.seq==null?'':'#'+safeText(m.seq)}</small></div>
+ <p>${safeText(m.detail)}</p><p class=message-meta>${safeText(m.route)}${m.gen_us==null?'':' · 보드 생성 '+(m.gen_us/1000000).toFixed(3)+'s'}${m.mode==null?'':' · mode '+safeText(m.mode)}</p>
+ ${m.payload?`<details data-key="${safeText(key)}" ${opened.has(key)?'open':''}><summary>상세 데이터 보기</summary><pre>${safeText(JSON.stringify(m.payload,null,2))}</pre></details>`:''}</article>`;}).join(''):'최근 기록에 해당 종류의 메시지가 없습니다.';
+}
+document.getElementById('messagefilter').addEventListener('change',renderMessages);
+function renderStatus(r){
+ const state=r.receiver_status||{}, rows=state.rows||{};
+ const rate=r.person&&r.person.rates;
+ const fps=rate&&Date.now()/1000-rate.received_epoch<20?rate.valid_frame_fps_10s:null;
+ const snapshot=r.person&&r.person.snapshot;
+ const ageText=age=>age==null?'미수신':age<60?age.toFixed(1)+'초 전':Math.floor(age/60)+'분 '+Math.floor(age%60)+'초 전';
+ const specs=[['image','카메라 영상'],['ai','AI 추론 결과'],['telemetry','장치 상태'],['memory','메모리 상태'],['critical','중요 이벤트'],['snapshot','추론 이미지']];
+ document.getElementById('receive-rows').innerHTML=specs.map(([key,title])=>{
+  const item=key==='snapshot'?(snapshot?{state:'event',age_s:Math.max(0,Date.now()/1000-snapshot.received_epoch),data:snapshot}:{state:'waiting',age_s:null}):(rows[key]||{state:'waiting',age_s:null});
+  const d=item.data||{};
+  let value='아직 수신한 기록 없음';
+  if(item.age_s!=null){
+   if(key==='image')value=(fps==null?'FPS 확인 중':Number(fps).toFixed(1)+' FPS')+' · 조립 JPEG '+(d.bytes/1024).toFixed(1)+' KiB';
+   if(key==='ai')value='검출 '+d.det_count+'개 · 점수 '+d.raw_score+'/255 · 입력 '+d.in_w+'×'+d.in_h;
+   if(key==='telemetry'||key==='critical')value=(d.source==='camera'?'카메라':'합성 데이터')+(Number.isFinite(d.frames)?' · 처리 '+d.frames+'장':'')+(Number.isFinite(d.ai_us)?' · AI '+(d.ai_us/1000).toFixed(0)+' ms':'');
+   if(key==='memory')value='여유 RAM '+(d.internal_free/1024).toFixed(0)+' KiB · PSRAM '+(d.psram_free/1048576).toFixed(2)+' MiB · '+d.state;
+   if(key==='snapshot')value='최근 감지 '+d.detections.length+'개 · 대상 프레임 '+d.frame_ts_ms+' ms';
+  }
+  const status=item.state==='late'?'갱신 지연':item.state==='event'?'발생 시 갱신':item.state==='waiting'?'대기':'갱신 중';
+  const interval=item.interval_s==null?'': ' · 주기 '+item.interval_s.toFixed(1)+'s';
+  const seq=item.seq==null?'':'#'+item.seq+' · ';
+  const clock=item.age_s==null?'':new Date(Date.now()-item.age_s*1000).toLocaleTimeString();
+  return `<div class=receive-row data-state="${safeText(item.state)}"><div><b>${title}</b><p>${safeText(value)}</p><p>${safeText(seq+status+interval)}</p></div><div class=receive-timing><strong>${safeText(ageText(item.age_s))}</strong><small>${safeText(clock)}</small></div></div>`;
+ }).join('');
+ const a=state.alignment||{}, delta=a.same_frame_receive_delta_ms, gap=a.source_gap_ms;
+ const matched=delta==null?'동일 프레임 수신 쌍 대기':delta>=0?'같은 프레임: AI가 영상보다 '+delta.toFixed(0)+' ms 늦게 수신':'같은 프레임: 영상이 AI보다 '+Math.abs(delta).toFixed(0)+' ms 늦게 수신';
+ const source=gap==null?'영상·AI 생성시각 비교 대기':gap===0?'최신 영상과 AI 대상 프레임 일치':gap>0?'AI 대상이 최신 영상보다 '+(gap/1000).toFixed(2)+'초 이전 프레임':'최신 AI 대상이 영상보다 '+(Math.abs(gap)/1000).toFixed(2)+'초 이후 프레임';
+ document.getElementById('alignment').textContent=(state.error?state.error+' · ':'')+matched+' / '+source;
+}
+async function tick(){try{
+ const response=await fetch('/api/research');
+ if(response.status===401){location='/login';return;}
+ if(!response.ok)throw new Error('HTTP '+response.status);
+ const r=await response.json();
+ if(r.person && r.person.snapshot){const p=r.person.snapshot;const shot=document.getElementById('personshot');
+ if(!shot.getAttribute('src')){shot.onload=()=>{shot.style.display='block';document.getElementById('personplaceholder').style.display='none';document.getElementById('personlink').hidden=false;};shot.onerror=()=>{shot.removeAttribute('src');shot.style.display='none';document.getElementById('personplaceholder').style.display='block';};shot.src='/person-stream?t='+Date.now();shot.style.display='block';document.getElementById('personplaceholder').style.display='none';document.getElementById('personlink').hidden=false;}
+ const age=Math.max(0,Date.now()/1000-p.received_epoch);
+ document.getElementById('personstatus').textContent=(age<5?'감지 사진 실시간 수신':'마지막 감지 사진 · '+Math.floor(age)+'초 전')+' · '+new Date(p.received_epoch*1000).toLocaleTimeString()+' · '+p.detections.length+'개 중심점 · 시험 모델';}
+ const rates=r.person&&r.person.rates;
+ const freshRates=rates && Date.now()/1000-rates.received_epoch<20;
+ renderStatus(r);
+ const camera=r.camera, img=document.getElementById('researchcam'), placeholder=document.getElementById('camplaceholder');
+ const cs=document.getElementById('camstatus');
+ if(camera && camera.age_s!=null){
+  cs.textContent=(camera.age_s<20?'수신 중':'수신 중단 · 마지막 영상')+' · '+camera.age_s+'초 전'+(img.naturalWidth?' · '+img.naturalWidth+'×'+img.naturalHeight:'')+(rates?' · '+rates.valid_frame_fps_10s+' FPS':'');
+  const cameraSource=camera.age_s<20?'live':'last';
+  if(!img.getAttribute('src') || img.dataset.source!==cameraSource){
+   cameraVersion=camera.version;
+   img.dataset.source=cameraSource;
+   img.onload=()=>{img.style.display='block';placeholder.style.display='none';};
+   img.onerror=()=>{img.removeAttribute('src');cameraVersion=null;img.style.display='none';placeholder.style.display='block';placeholder.textContent='프레임 읽기 실패 · 재시도 중';};
+   img.src=cameraSource==='live'?'/stream?t='+Date.now():'/frame.jpg?v='+camera.version;
+   img.style.display='block';placeholder.style.display='none';
+  }
+ }else{cs.textContent='프레임 없음';img.style.display='none';placeholder.style.display='block';}
+ document.getElementById('status').textContent=r.online?'● 데이터 수신 중':'● 수신 중단 / 대기';
+ document.getElementById('status').dataset.online=String(r.online);
+ const rows=r.receiver_status&&r.receiver_status.rows;
+ const states=rows?[rows.telemetry,rows.critical].filter(x=>x&&x.data&&Number.isInteger(x.data.mode)).sort((a,b)=>b.received_s-a.received_s):[];
+ const currentMode=states.length?states[0].data.mode:r.mode;
+ document.getElementById('mode').textContent=currentMode==null?'—':['0 · 재연결','1 · Migration FIFO','2 · 우선순위 스케줄러'][currentMode];
+ document.getElementById('critical').textContent=r.critical;
+ document.getElementById('telemetry').textContent=r.telemetry;
+ document.getElementById('updated').textContent=r.age_s==null?'수신 대기 중':'데이터 갱신 '+r.age_s+'초 전';
+ latestMessages=r.messages;renderMessages();
+ }catch(e){document.getElementById('status').textContent='모니터링 서버 연결 끊김';document.getElementById('status').dataset.online='false';}}
+tick();setInterval(tick,1500);
+</script></body></html>""".replace("__CSS__", CSS + RESEARCH_CSS)
+
+
 def settings_html(msg=""):
     dn = device_names()
     default_pw = check_password(os.environ.get("AIOT_PASS", "admin"))
@@ -616,17 +906,39 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(401, '{"error":"auth"}', "application/json")
             return self._redirect("/login")
         if p in ("/", "/index.html"):
-            return self._send(200, DASHBOARD_HTML)
+            return self._send(200, RESEARCH_HTML if _research_feed else DASHBOARD_HTML)
         if p == "/settings":
             return self._send(200, settings_html())
         if p == "/onboard":
             return self._send(200, onboard_html())
+        if p == "/focus" and _research_feed:
+            return self._send(200, Path(__file__).with_name("focus.html").read_text())
         if p == "/api/devices":
             return self._send(200, json.dumps(snapshot()), "application/json")
+        if p == "/api/research" and _research_feed:
+            data = research_snapshot(_research_feed, ai_log=_ai_log)
+            data["receiver_status"] = _receiver_status.snapshot() if _receiver_status else None
+            person_dir = Path(__file__).resolve().parents[1] / "experiments/person_detection/results"
+            data["person"] = {}
+            for name in ("snapshot", "rates"):
+                try: data["person"][name] = json.loads((person_dir / (name + ".json")).read_text())
+                except (OSError, ValueError): pass
+            data["camera"] = {"age_s": None, "version": None}
+            try:
+                st = os.stat(_image_path)
+                data["camera"] = {"age_s": round(max(0, time.time() - st.st_mtime), 1),
+                                  "version": str(st.st_mtime_ns)}
+            except (OSError, TypeError):
+                pass
+            return self._send(200, json.dumps(data), "application/json")
         if p == "/api/history":
             with _lock:
                 hist = {dev: _devices[dev]["events"] for dev in _devices}
             return self._send(200, json.dumps(hist), "application/json")
+        if p in ("/person-marked.jpg", "/person-original.jpg"):
+            image = Path(__file__).resolve().parents[1] / "experiments/person_detection/results" / p[1:]
+            try: return self._send(200, image.read_bytes(), "image/jpeg")
+            except OSError: return self._send(404, "no person snapshot yet", "text/plain")
         if p == "/frame.jpg":
             data = read_image()
             if data:
@@ -634,9 +946,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(503, "no frame yet", "text/plain")
         if p == "/stream":
             return self._mjpeg()
+        if p == "/person-stream":
+            image = Path(__file__).resolve().parents[1] / "experiments/person_detection/results/person-marked.jpg"
+            return self._mjpeg(image)
         return self._send(404, "not found", "text/plain")
 
-    def _mjpeg(self):
+    def _mjpeg(self, image_path=None):
         self.send_response(200)
         self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
         self.send_header("Cache-Control", "no-store")
@@ -644,14 +959,19 @@ class Handler(BaseHTTPRequestHandler):
         last = None
         try:
             while True:
-                data = read_image()
+                if image_path is None:
+                    data = read_image()
+                else:
+                    try: data = image_path.read_bytes()
+                    except OSError: data = None
                 if data is not None and data != last:
                     last = data
                     self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\n"
                                      b"Content-Length: " + str(len(data)).encode() + b"\r\n\r\n")
                     self.wfile.write(data)
                     self.wfile.write(b"\r\n")
-                time.sleep(0.08)
+                    self.wfile.flush()
+                time.sleep(0.02)
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
@@ -704,20 +1024,28 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global _image_path
+    global _image_path, _research_feed, _ai_log, _receiver_status
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--feed", default=os.environ.get("AIOT_FEED_LOG", "aiot_feed.jsonl"))
     ap.add_argument("--db", default=os.environ.get("AIOT_DB", os.path.join(os.path.dirname(__file__), "aiot.db")))
     ap.add_argument("--image", default=os.environ.get("AIOT_IMAGE", os.path.join(os.path.dirname(__file__), "latest.jpg")))
+    ap.add_argument("--research", action="store_true", help="Show handoff experiment messages instead of occupancy")
+    ap.add_argument("--ai-log", help="Receiver ai_recv.csv, defaults to the feed directory")
     args = ap.parse_args()
     _image_path = args.image
+    _research_feed = args.feed if args.research else None
+    _ai_log = args.ai_log or os.path.join(os.path.dirname(args.feed), "ai_recv.csv")
+    if args.research:
+        _receiver_status = ReceiverStatus(args.feed)
+        threading.Thread(target=_receiver_status.run, daemon=True).start()
 
     db_init(args.db, os.environ.get("AIOT_PASS", "admin"))
     with _lock:
         db_load()
-    threading.Thread(target=tail_feed, args=(args.feed,), daemon=True).start()
+    if not args.research:
+        threading.Thread(target=tail_feed, args=(args.feed,), daemon=True).start()
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"[dashboard] feed={args.feed} db={args.db} user={USER} http://{args.host}:{args.port}/")
     try:

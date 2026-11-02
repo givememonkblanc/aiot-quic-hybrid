@@ -1973,10 +1973,10 @@ int picoquic_incoming_1rtt(
             cnx->is_1rtt_received = 1;
             picoquic_spin_function_table[cnx->spin_policy].spinbit_incoming(cnx, path_x, ph);
             /* Accept the incoming frames */
-            ret = picoquic_decode_frames(cnx, cnx->path[path_id],
+            ret = picoquic_decode_frames_ex(cnx, cnx->path[path_id],
                 bytes + ph->offset, ph->payload_length, received_data,
                 ph->epoch, addr_from, addr_to, ph->pn64,
-                path_is_not_allocated, current_time);
+                path_is_not_allocated, current_time, ph->l_cid);
 
             if (ret == 0) {
                 /* Compute receive bandwidth */

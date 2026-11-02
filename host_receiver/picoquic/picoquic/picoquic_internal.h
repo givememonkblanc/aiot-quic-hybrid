@@ -2055,6 +2055,11 @@ uint8_t* picoquic_format_path_abandon_frame(uint8_t* bytes, uint8_t* bytes_max, 
     uint64_t path_id, uint64_t reason);
 int picoquic_queue_path_abandon_frame(picoquic_cnx_t* cnx,
     uint64_t unique_path_id, uint64_t reason);
+int picoquic_decode_frames_ex(picoquic_cnx_t* cnx, picoquic_path_t* path_x,
+    const uint8_t* bytes, size_t bytes_max, picoquic_stream_data_node_t* received_data,
+    int epoch, struct sockaddr* addr_from, struct sockaddr* addr_to,
+    uint64_t pn64, int path_is_not_allocated, uint64_t current_time,
+    picoquic_local_cnxid_t* receiving_cid);
 int picoquic_decode_frames(picoquic_cnx_t* cnx, picoquic_path_t * path_x, const uint8_t* bytes, size_t bytes_max,
     picoquic_stream_data_node_t* received_data,
     int epoch, struct sockaddr* addr_from, struct sockaddr* addr_to, uint64_t pn64, int path_is_not_allocated, uint64_t current_time);
