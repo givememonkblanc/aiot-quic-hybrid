@@ -1,21 +1,25 @@
-// Copyright 2020-2021 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2020-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
+
+#include <stdint.h>
+
+/* pass/fail tallies for the whole run, printed as the machine-readable verdict */
+extern uint32_t esp_nn_test_passed;
+extern uint32_t esp_nn_test_failed;
+extern uint32_t esp_nn_test_skipped;
+
+void esp_nn_test_pass(void);
+void esp_nn_test_fail(void);
+void esp_nn_test_skip(void);
 
 /* int8_t ops tests */
 void esp_nn_add_elementwise_s8_test();
 void esp_nn_mul_elementwise_s8_test();
+void esp_nn_mul_broadcast_channel_s8_test();
 
 void esp_nn_depthwise_conv_s8_test();
 void esp_nn_conv_s8_test();
@@ -25,10 +29,16 @@ void esp_nn_max_pool_s8_test();
 
 void esp_nn_fully_connected_s8_test();
 void esp_nn_fully_connected_per_ch_s8_test();
+void esp_nn_fully_connected_per_ch_s8_batch_test();
+void esp_nn_fully_connected_align_s8_test();
+void esp_nn_fully_connected_perf_test();
 
 void esp_nn_relu6_s8_test();
 
 void esp_nn_softmax_s8_test();
+
+void esp_nn_hard_swish_s8_test();
+void esp_nn_mean_nhwc_s8_test();
 
 /* uint8_t ops tests */
 void esp_nn_add_elementwise_u8_test();
